@@ -1,7 +1,7 @@
 //! Selected FFI bindings to AudioToolbox and related frameworks.
 //!
 //! To facilitate cross referencing with macOS API documentation,
-//! types that cross the FFI boundary generally follow simmilar
+//! types that cross the FFI boundary generally follow similar
 //! naming and type aliasing conventions to those found in the macOS SDK header
 //! files.
 
@@ -30,13 +30,13 @@ pub type AudioFileID = *const OpaqueAudioFileID;
 /// Constant value used to supply audio file type hints.
 pub type AudioFileTypeID = u32;
 
-/// Determines if an audio file should be readable, writeable or both.
+/// Determines if an audio file should be readable, writable or both.
 pub type AudioFilePermissions = i8;
 
 /// Used to indicate that an audio file should be read only.
 pub const AUDIO_FILE_READ_PERMISSION: i8 = 1;
 
-/// A refeferance to an opaque type representing an audio queue object.
+/// A reference to an opaque type representing an audio queue object.
 ///
 /// An audio queue enables recording and playback of audio in macOS.
 ///
@@ -47,16 +47,16 @@ pub const AUDIO_FILE_READ_PERMISSION: i8 = 1;
 /// - Mediating recording or playback
 pub type AudioQueueRef = *const OpaqueAudioQueue;
 
-/// Speficies the format of an audio stream.
+/// Specifies the format of an audio stream.
 ///
-/// An audio stream is a continious sequence of numeric samples, arranged into
+/// An audio stream is a continuous sequence of numeric samples, arranged into
 /// one or more discrete channels of monophonic sound. Samples that are
-/// co-incident in time are refered to as a "frame". E.g a stereo sound file has
-/// two samples per frame.
+/// co-incident in time are referred to as a "frame". E.g a stereo sound file
+/// has two samples per frame.
 ///
-/// For a given audio format, the smallest meaningful collection of contigious
+/// For a given audio format, the smallest meaningful collection of contiguous
 /// frames is known as a "packet". While for linear PCM audio, a packet contains
-/// a single frame, in compressed formats a packet typcially holds more, or can
+/// a single frame, in compressed formats a packet typically holds more, or can
 /// even have a variable size.
 ///
 /// To determine the duration represented by one packet, use the `sample_rate`
@@ -73,7 +73,7 @@ pub type AudioQueueRef = *const OpaqueAudioQueue;
 /// individual packet.
 ///
 /// A field value of 0 indicates that the value is either unknown or not
-/// applicable to the format. Always initialize the fields of a new audio stream
+/// applicable to the format. Always initialise the fields of a new audio stream
 /// basic description structure to zero, as shown here:
 /// AudioStreamBasicDescription myAudioDataFormat = {0};
 #[repr(C)]
@@ -107,15 +107,15 @@ pub struct AudioQueueBuffer {}
 
 /// This type defines a callback function that is called each time its
 /// associated output audio queue has finished processing a buffer of data, and
-/// is ready for the buffer to be reused. Typcially a implementation of this
-/// callback will immediately refill and re-enque the buffer.
+/// is ready for the buffer to be reused. Typically a implementation of this
+/// callback will immediately refill and re-enqueue the buffer.
 ///
 /// The `in_aq` parameter specifies which audio queue invoked the callback,
 /// and the `in_buffer` parameter will point to the newly available buffer.
 ///
 /// A callback is associated with an audio queue when the audio queue is
 /// created. This is also the point at which custom user data is defined. User
-/// data is made available in the callback via the `in_user_data` paramater and
+/// data is made available in the callback via the `in_user_data` parameter and
 /// will typically contain information about the currently data format and queue
 /// state.
 ///
@@ -139,7 +139,7 @@ extern "C" {
     /// The `in_permissions` parameter determines if the file is opened as read,
     /// write or read and write.
     ///
-    /// If the name of the file has no extenion and the type of the file can't
+    /// If the name of the file has no extension and the type of the file can't
     /// be easily or uniquely determined from its contents, then `in_file_hint`
     /// can be used to indicate the file type. Set `in_file_hint` to zero to
     /// omit a hint.
@@ -207,7 +207,7 @@ extern "C" {
     ///
     /// The boolean `is_directory` specifies whether
     /// the string is treated as a directory path when resolving against
-    /// relative path components. True if the pathname indicates a directory,
+    /// relative path components. True if the path name indicates a directory,
     /// false otherwise.
     ///
     /// The return value of this function is a pointer to an opaque CFURL
