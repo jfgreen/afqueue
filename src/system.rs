@@ -78,32 +78,63 @@ pub type AudioQueueRef = *const OpaqueAudioQueue;
 /// AudioStreamBasicDescription myAudioDataFormat = {0};
 #[repr(C)]
 pub struct AudioStreamBasicDescription {
-    /// Number of frames per second of uncompressed (or decompressed) audio
+    /// Number of frames per second of uncompressed (or decompressed) audio.
     sample_rate: f64,
-    /// General kind of data in the stream
+    /// General kind of data in the stream.
     format_id: u32,
-    /// Flags for the format indicated by format_id
+    /// Flags for the format indicated by format_id.
     format_flags: u32,
-    /// Number of bytes in each packet
+    /// Number of bytes in each packet.
     bytes_per_packet: u32,
-    /// Number of sample frames in each packet
+    /// Number of sample frames in each packet.
     frames_per_packet: u32,
-    /// Number of bytes in a sample frame
+    /// Number of bytes in a sample frame.
     bytes_per_frame: u32,
-    /// Number of channels in each frame of data
+    /// Number of channels in each frame of data.
     channels_per_frame: u32,
-    /// Number of bits of sample data for each channel in a
+    /// Number of bits of sample data for each channel.
     bits_per_channel: u32,
     /// Pads out the structure to force an even 8 byte alignment
     reserved: u32,
 }
 
+//TODO: Implement, doc
+#[repr(C)]
+pub struct AudioStreamPacketDescription {}
+
 /// A reference to an audio queue buffer
 pub type AudioQueueBufferRef = *mut AudioQueueBuffer;
 
-//TODO: Implement, doc
+/// A buffer of audio data associated with an audio queue.
+/// Each audio queue manages a set of these buffers.
+///
+/// The buffer size, indicated by `audio_data_bytes_capacity` is set when the
+/// buffer is allocated, and can not be changed.
+///
+/// When providing buffers to an output audio queue for playback, you must set
+/// `packet_description_count` and `audio_data_byte_size`. Conversely, when
+/// receiving buffers from a recording queue, these values will be instead set
+/// by the audio queue.
+///
+/// Note: While it's possible to write to the data pointed to by the
+/// `audio_data` field the pointer address itself must not be changed.
 #[repr(C)]
-pub struct AudioQueueBuffer {}
+pub struct AudioQueueBuffer {
+    /// The size of the audio queue buffer, in bytes.
+    audio_data_bytes_capacity: u32,
+    /// Pointer to audio data.
+    audio_data: *const c_void,
+    /// The number of bytes of audio data in the `audio_data` field.
+    audio_data_byte_size: u32,
+    /// Custom data specified during audio queue creation.
+    user_data: *const c_void,
+    /// The max number of entries that can be stored in `packet_descriptions`.
+    packet_description_capacity: u32,
+    /// Pointer to an array of descriptions (when packet size varies).
+    packet_descriptions: *const AudioStreamPacketDescription,
+    /// The number of packet descriptions in the buffer.
+    packet_description_count: u32,
+}
 
 /// This type defines a callback function that is called each time its
 /// associated output audio queue has finished processing a buffer of data, and
