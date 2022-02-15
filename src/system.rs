@@ -161,8 +161,11 @@ pub type AudioQueueOutputCallback = unsafe extern "C" fn(
 #[link(name = "AudioToolbox", kind = "framework")]
 extern "C" {
 
+    /// An opaque data type that represents an audio file.
     pub type OpaqueAudioFileID;
+    /// An opaque data type that represents an audio queue.
     pub type OpaqueAudioQueue;
+
     /// Open an audio file with the AudioToolbox framework.
     ///
     /// Opens the audio file specified by `in_ref_file`.
@@ -212,6 +215,8 @@ pub type CFURLRef = *const CFURL;
 
 #[link(name = "CoreFoundation", kind = "framework")]
 extern "C" {
+
+    /// Core Foundation URL, provides functionality to manipulate URL strings.
     pub type CFURL;
 
     /// Creates a new Core Foundation URL (CFURL) from the systems "native"
