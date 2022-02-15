@@ -52,7 +52,6 @@ fn play(path: String) -> Result<(), PlaybackError> {
             false,
         );
 
-        //TODO: Release somehow?
         let mut audio_file_id = MaybeUninit::uninit();
 
         let status = system::audio_file_open_url(

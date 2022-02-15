@@ -30,6 +30,9 @@ pub type AudioFileID = *const OpaqueAudioFileID;
 /// Constant value used to supply audio file type hints.
 pub type AudioFileTypeID = u32;
 
+/// Constant value identifying an audio file property.
+pub type AudioFilePropertyID = u32;
+
 /// Determines if an audio file should be readable, writable or both.
 pub type AudioFilePermissions = i8;
 
@@ -194,6 +197,38 @@ extern "C" {
     /// Close an audio file
     #[link_name = "AudioFileClose"]
     pub fn audio_file_close(in_audio_file: AudioFileID) -> OSStatus;
+
+    //TODO: Implement, doc
+    #[link_name = "AudioFileGetPropertyInfo"]
+    pub fn audio_file_get_proprty_info();
+
+    /// Get the value of an audio file property by copying it into a buffer.
+    ///
+    /// For the audio file indicated by the `in_audio_file`, fetches the
+    /// property specified by `in_property_id`, and writes it to
+    /// `out_property_data`.
+    ///
+    /// The `io_data_size` parameter serves two purposes.
+    /// When calling this function, it should contain the size of the
+    /// buffer supplied to `out_property_data`. On function return, its
+    /// value will contain the number of bytes written to the buffer.
+    ///
+    /// To help correctly size the output buffer, the
+    /// `audio_file_get_property_info` function can be used to determine the
+    /// size of the property ahead of time.
+    ///
+    /// Some audio file property values are C types and others are Core
+    /// Foundation objects. If this function returns a Core Foundation
+    /// object, then you are responsible for releasing it.
+    ///
+    /// Returns an error if unsuccessful.
+    #[link_name = "AudioFileGetProperty"]
+    pub fn audio_file_get_property(
+        in_audio_file: AudioFileID,
+        in_property_id: AudioFilePropertyID,
+        io_data_size: *mut u32,
+        out_property_data: *mut c_void,
+    ) -> OSStatus;
 
     //TODO: Doc
     /*
