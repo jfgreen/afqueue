@@ -105,7 +105,7 @@ pub struct AudioStreamBasicDescription {
 #[repr(C)]
 pub struct AudioStreamPacketDescription {}
 
-/// A reference to an audio queue buffer
+/// A reference to an audio queue buffer.
 pub type AudioQueueBufferRef = *mut AudioQueueBuffer;
 
 /// A buffer of audio data associated with an audio queue.
@@ -139,6 +139,8 @@ pub struct AudioQueueBuffer {
     packet_description_count: u32,
 }
 
+/// Callback to respond when an output audio queue has a buffer to reuse.
+///
 /// This type defines a callback function that is called each time its
 /// associated output audio queue has finished processing a buffer of data, and
 /// is ready for the buffer to be reused. Typically a implementation of this
@@ -198,9 +200,23 @@ extern "C" {
     #[link_name = "AudioFileClose"]
     pub fn audio_file_close(in_audio_file: AudioFileID) -> OSStatus;
 
-    //TODO: Implement, doc
+    /// Retrieve information about an audio file property.
+    ///
+    /// For a particular property of an audio file (specified by
+    /// `in_property_id` and `in_audio_file` respectively), fetch the
+    /// following:
+    /// - The size in bytes of the parameter, written to `out_data_size`.
+    /// - Whether or not the property is writable, written to `is_writable`.
+    ///   This value will equal 1 if true and zero if false.
+    ///
+    /// Returns an error if unsuccessful.
     #[link_name = "AudioFileGetPropertyInfo"]
-    pub fn audio_file_get_proprty_info();
+    pub fn audio_file_get_proprty_info(
+        in_audio_file: AudioFileID,
+        in_property_id: AudioFilePropertyID,
+        out_data_size: *mut u32,
+        is_writable: *mut u32,
+    ) -> OSStatus;
 
     /// Get the value of an audio file property by copying it into a buffer.
     ///
