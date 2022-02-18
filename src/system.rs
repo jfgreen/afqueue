@@ -39,6 +39,12 @@ pub type AudioFilePermissions = i8;
 /// Used to indicate that an audio file should be read only.
 pub const AUDIO_FILE_READ_PERMISSION: i8 = 1;
 
+/// Audio file property constant used to access information about a file.
+///
+/// This constant can be used with `audio_file_get_property` to obtain a Core
+/// Foundation dictionary containin information describing an audio file.
+pub const AUDIO_FILE_PROPERTY_INFO_DICTIONARY: u32 = u32::from_be_bytes(*b"info");
+
 /// A reference to an opaque type representing an audio queue object.
 ///
 /// An audio queue enables recording and playback of audio in macOS.
@@ -211,7 +217,7 @@ extern "C" {
     ///
     /// Returns an error if unsuccessful.
     #[link_name = "AudioFileGetPropertyInfo"]
-    pub fn audio_file_get_proprty_info(
+    pub fn audio_file_get_property_info(
         in_audio_file: AudioFileID,
         in_property_id: AudioFilePropertyID,
         out_data_size: *mut u32,
