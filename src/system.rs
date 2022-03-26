@@ -6,8 +6,6 @@
 //! files.
 
 use std::ffi::c_void;
-use std::mem::MaybeUninit;
-use std::ptr;
 
 /// A type free reference to an opaque Core Foundation object.
 ///
@@ -42,7 +40,9 @@ pub const AUDIO_FILE_READ_PERMISSION: i8 = 1;
 /// Audio file property constant used to access information about a file.
 ///
 /// This constant can be used with `audio_file_get_property` to obtain a Core
-/// Foundation dictionary containin information describing an audio file.
+/// Foundation dictionary containig information describing an audio file.
+///
+/// The caller is responsable for releasing the dictionary via `cf_release`.
 pub const AUDIO_FILE_PROPERTY_INFO_DICTIONARY: u32 = u32::from_be_bytes(*b"info");
 
 /// A reference to an opaque type representing an audio queue object.
@@ -206,24 +206,6 @@ extern "C" {
     #[link_name = "AudioFileClose"]
     pub fn audio_file_close(in_audio_file: AudioFileID) -> OSStatus;
 
-    /// Retrieve information about an audio file property.
-    ///
-    /// For a particular property of an audio file (specified by
-    /// `in_property_id` and `in_audio_file` respectively), fetch the
-    /// following:
-    /// - The size in bytes of the parameter, written to `out_data_size`.
-    /// - Whether or not the property is writable, written to `is_writable`.
-    ///   This value will equal 1 if true and zero if false.
-    ///
-    /// Returns an error if unsuccessful.
-    #[link_name = "AudioFileGetPropertyInfo"]
-    pub fn audio_file_get_property_info(
-        in_audio_file: AudioFileID,
-        in_property_id: AudioFilePropertyID,
-        out_data_size: *mut u32,
-        is_writable: *mut u32,
-    ) -> OSStatus;
-
     /// Get the value of an audio file property by copying it into a buffer.
     ///
     /// For the audio file indicated by the `in_audio_file`, fetches the
@@ -270,11 +252,129 @@ extern "C" {
 /// A reference to an opaque CFURL object.
 pub type CFURLRef = *const CFURL;
 
+/// A reference to an opaque CFDictionary object.
+pub type CFDictionaryRef = *const CFDictionary;
+
+/// A reference to an opaque CFString object.
+pub type CFStringRef = *const CFString;
+
+/// Specifies a particular string encoding.
+///
+/// Used when interacting with CFString functions.
+pub type CFStringEncoding = u32;
+
+/// Signed integer type used throughout CoreFoundation.
+pub type CFIndex = isize;
+
+/// Indicates UTF-8 string encoding.
+pub const CFSTRING_ENCODING_UTF8: CFStringEncoding = 0x08000100;
+
+/// Representation of a range of sequential items.
+#[repr(C)]
+pub struct CFRange {
+    pub location: CFIndex,
+    pub length: CFIndex,
+}
+
 #[link(name = "CoreFoundation", kind = "framework")]
 extern "C" {
 
     /// Core Foundation URL, provides functionality to manipulate URL strings.
     pub type CFURL;
+
+    /// Core Foundation Dictionary, holds data in key value pairs.
+    pub type CFDictionary;
+
+    /// Core Foundation String, facilitates various string manipulation
+    /// functionality.
+    pub type CFString;
+
+    /// Get the number of key value pairs stored in a `CFDictionary`.
+    ///
+    /// Note: passing in anything other than a valid `CFDictionary` is undefined
+    /// behavior.
+    #[link_name = "CFDictionaryGetCount"]
+    pub fn cfdictionary_get_count(dict: CFDictionaryRef) -> CFIndex;
+
+    /// Extract keys and values from a CFDictionary.
+    ///
+    /// For the dictionary referenced by `dict`, extract its contents into
+    /// buffers referenced by `keys` and `values`.
+    ///
+    /// These  output buffers should be C style array of pointer sized values
+    /// and have enough capacity to hold the dictionary contents.
+    ///
+    /// Use the `cfdictionary_get_count` function to assist in constructing
+    /// output buffers of the correct size.
+    ///
+    /// Key value pairs are output parallel, i.e pairs in the dictionary will
+    /// have the same index in each respective buffer.
+    ///
+    /// Either buffer parameter can take a null pointer if output is not
+    /// required.
+    ///
+    /// If any returned keys or values are Core Foundation objects then their
+    /// ownership follows The Get Rule.
+    ///
+    /// Note, the following is considered to be undefined behaviour:
+    ///  - Passing in anything other than a valid `CFDictionary` to the `dict`
+    ///    parameter.
+    ///  - passing in anything other than a valid pointer to an appropriately
+    ///    size C style array to `keys` or `values`.
+    #[link_name = "CFDictionaryGetKeysAndValues"]
+    pub fn cfdictionary_get_keys_and_values(
+        dict: CFDictionaryRef,
+        keys: *mut *const c_void,
+        values: *mut *const c_void,
+    );
+
+    /// Get the length of a string in the  UTF-16 code units.
+    ///
+    /// For example:
+    ///  - "tree" -> 4
+    ///  - "🍊tree" -> 6
+    ///  - "𐑐" -> 2
+    #[link_name = "CFStringGetLength"]
+    pub fn cfstring_get_length(string_ref: CFStringRef) -> CFIndex;
+
+    /// Extract a range of characters from a CFString into a buffer using a
+    /// specified encoding.
+    ///
+    /// For the Core Foundation string referenced by the `string_ref` parameter,
+    /// extract the range of characters specificed by `range`, into `buffer`
+    /// using the encoding indicated by `encoding`.
+    ///
+    /// Note, this function requries you to follow these constraints:
+    /// - The requested range must not exceed the length of the string.
+    /// - The `max_buf_len` parameter should contain the size of `buffer`.
+    ///
+    /// The `loss_byte` parameter can be used to choose a character that is
+    /// substituted for characters that can not be represented in the requested
+    /// encoding. Passing `0` indicates that lossy conversion should not
+    /// occur.
+    ///
+    /// Setting the `is_external_representation` parameter to true will
+    /// potentially add a byte order marker indicating endianness.
+    ///
+    /// Passing null to `buffer` is permissible if you are only interested in if
+    /// conversion will succeed and if so how many bytes are required.
+    ///
+    /// On return `used_buf_len` will hold the number of converted bytes
+    /// actually in the buffer. This parameter accepts null if this information
+    /// is not needed.
+    ///
+    /// Returns the number of characters converted.
+    #[link_name = "CFStringGetBytes"]
+    pub fn cfstring_get_bytes(
+        string_ref: CFStringRef,
+        range: CFRange,
+        encoding: CFStringEncoding,
+        loss_byte: u8,
+        is_external_representation: bool,
+        buffer: *mut u8,
+        max_buf_len: CFIndex,
+        used_buf_len: *mut CFIndex,
+    ) -> CFIndex;
 
     /// Creates a new Core Foundation URL (CFURL) from the systems "native"
     /// string representation.
@@ -310,7 +410,7 @@ extern "C" {
     pub fn cfurl_create_from_filesystem_representation(
         allocator: CFAllocatorRef,
         buffer: *const u8,
-        buf_len: isize,
+        buf_len: CFIndex,
         is_directory: bool,
     ) -> CFURLRef;
 
