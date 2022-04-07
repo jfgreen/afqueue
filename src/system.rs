@@ -107,9 +107,25 @@ pub struct AudioStreamBasicDescription {
     reserved: u32,
 }
 
-//TODO: Implement, doc
+/// Supplementary information used to describe variable sized audio packets.
+///
+/// Describes a packet in a buffer of data where the size of each packet may
+/// vary, or there is extra non audio data between each packet.
+///
+/// This is necessary to describe variable bit rate formats or in cases when the
+/// channels are of unequal size. In these scenarios
+/// `AudioStreamPacketDescription` supplements the information in
+/// `AudioStreamBasicDescription`.
 #[repr(C)]
-pub struct AudioStreamPacketDescription {}
+pub struct AudioStreamPacketDescription {
+    /// The number of bytes from the start of the buffer to the packet
+    start_offset: i64,
+    /// The number of samples frames in the packet.
+    /// This is 0 for formats with a constant number of frames per packet.
+    variable_frames_in_packet: u32,
+    /// The number of bytes in the packet.
+    data_byte_size: u32,
+}
 
 /// A reference to an audio queue buffer.
 pub type AudioQueueBufferRef = *mut AudioQueueBuffer;
