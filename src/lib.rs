@@ -106,18 +106,23 @@ impl AudioFile {
         unsafe {
             // Obtain a reference to the properties dictionary
             let mut info_dict = MaybeUninit::<system::CFDictionaryRef>::uninit();
-            let mut dict_ref_size = mem::size_of::<system::CFDictionaryRef>() as u32;
+            let mut data_size = mem::size_of::<system::CFDictionaryRef>() as u32;
 
             let status = system::audio_file_get_property(
                 self.file_id,
                 system::AUDIO_FILE_PROPERTY_INFO_DICTIONARY,
-                &mut dict_ref_size as *mut _,
+                &mut data_size as *mut _,
                 info_dict.as_mut_ptr() as *mut c_void,
             );
             let info_dict = info_dict.assume_init();
+
             if status != 0 {
                 return Err(PlaybackError::FailedToReadFileProperty(status));
             }
+
+            // audio_file_get_property outputs the number of bytes written to data_size
+            // Check to see if this is correct for our given type
+            assert!(data_size == mem::size_of::<system::CFDictionaryRef>() as u32);
 
             // Extract keys and values
             let count = system::cfdictionary_get_count(info_dict);
@@ -154,6 +159,32 @@ impl AudioFile {
         Ok(())
     }
 
+    fn get_basic_description(&self) -> Result<system::AudioStreamBasicDescription, PlaybackError> {
+        // TODO: Create helper function for audio_file_get_property
+        let mut basic_description = MaybeUninit::<system::AudioStreamBasicDescription>::uninit();
+        let mut data_size = mem::size_of::<system::AudioStreamBasicDescription>() as u32;
+
+        unsafe {
+            let status = system::audio_file_get_property(
+                self.file_id,
+                system::AUDIO_FILE_PROPERTY_DATA_FORMAT,
+                &mut data_size as *mut _,
+                basic_description.as_mut_ptr() as *mut c_void,
+            );
+            let basic_description = basic_description.assume_init();
+
+            if status != 0 {
+                return Err(PlaybackError::FailedToReadFileProperty(status));
+            }
+
+            // audio_file_get_property outputs the number of bytes written to data_size
+            // Check to see if this is correct for our given type
+            assert!(data_size == mem::size_of::<system::AudioStreamBasicDescription>() as u32);
+
+            return Ok(basic_description);
+        }
+    }
+
     fn close(self) -> Result<(), PlaybackError> {
         unsafe {
             let status = system::audio_file_close(self.file_id);
@@ -168,6 +199,9 @@ impl AudioFile {
 pub fn play(path: String) -> Result<(), PlaybackError> {
     let audio_file = AudioFile::open(path)?;
     audio_file.print_properties()?;
+    let basic_description = audio_file.get_basic_description()?;
+    println!("{basic_description:?}");
+
     audio_file.close()?;
     Ok(())
 }

@@ -1,4 +1,4 @@
-//! Selected FFI bindings to AudioToolbox and related frameworks.
+//! Selected FFI bindings to AudioToolbox and related system frameworks.
 //!
 //! To facilitate cross referencing with macOS API documentation,
 //! types that cross the FFI boundary generally follow similar
@@ -45,6 +45,12 @@ pub const AUDIO_FILE_READ_PERMISSION: i8 = 1;
 /// The caller is responsable for releasing the dictionary via `cf_release`.
 pub const AUDIO_FILE_PROPERTY_INFO_DICTIONARY: u32 = u32::from_be_bytes(*b"info");
 
+/// Audio file property constant used to obtain an audio format description.
+///
+/// Using this constant with `audio_file_get_property` will return an
+/// AudioStreamBasicDescription describing the files audio format.
+pub const AUDIO_FILE_PROPERTY_DATA_FORMAT: u32 = u32::from_be_bytes(*b"dfmt");
+
 /// A reference to an opaque type representing an audio queue object.
 ///
 /// An audio queue enables recording and playback of audio in macOS.
@@ -55,6 +61,12 @@ pub const AUDIO_FILE_PROPERTY_INFO_DICTIONARY: u32 = u32::from_be_bytes(*b"info"
 /// - Employing codecs, as needed, for compressed audio formats
 /// - Mediating recording or playback
 pub type AudioQueueRef = *const OpaqueAudioQueue;
+
+/// Specifies an audio format
+pub type AudioFormatID = u32;
+
+/// Specifies format specific flags
+pub type AudioFormatFlags = u32;
 
 /// Specifies the format of an audio stream.
 ///
@@ -85,14 +97,15 @@ pub type AudioQueueRef = *const OpaqueAudioQueue;
 /// applicable to the format. Always initialise the fields of a new audio stream
 /// basic description structure to zero, as shown here:
 /// AudioStreamBasicDescription myAudioDataFormat = {0};
+#[derive(Debug)]
 #[repr(C)]
 pub struct AudioStreamBasicDescription {
     /// Number of frames per second of uncompressed (or decompressed) audio.
     sample_rate: f64,
     /// General kind of data in the stream.
-    format_id: u32,
+    format_id: AudioFormatID,
     /// Flags for the format indicated by format_id.
-    format_flags: u32,
+    format_flags: AudioFormatFlags,
     /// Number of bytes in each packet.
     bytes_per_packet: u32,
     /// Number of sample frames in each packet.
@@ -307,8 +320,7 @@ extern "C" {
 
     /// Get the number of key value pairs stored in a `CFDictionary`.
     ///
-    /// Note: passing in anything other than a valid `CFDictionary` is undefined
-    /// behavior.
+    /// Passing in anything other than a `CFDictionary` is undefined behavior.
     #[link_name = "CFDictionaryGetCount"]
     pub fn cfdictionary_get_count(dict: CFDictionaryRef) -> CFIndex;
 
