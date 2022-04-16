@@ -109,16 +109,14 @@ impl AudioFile {
 
             // Extract keys and values
             let count = sys::cfdictionary_get_count(info_dict);
-            let mut keys = Vec::<sys::CFStringRef>::with_capacity(count as usize);
-            let mut values = Vec::<sys::CFStringRef>::with_capacity(count as usize);
+            let mut keys = vec![0 as *const _; count as usize];
+            let mut values = vec![0 as *const _; count as usize];
+
             sys::cfdictionary_get_keys_and_values(
                 info_dict,
                 keys.as_mut_ptr() as *mut *const c_void,
                 values.as_mut_ptr() as *mut *const c_void,
             );
-
-            keys.set_len(count as usize);
-            values.set_len(count as usize);
 
             // Convert to Rust strings
             println!("keys:");
@@ -168,6 +166,8 @@ pub fn play(path: String) -> Result<(), PlaybackError> {
 }
 
 unsafe fn cfstring_to_string(cfstring: sys::CFStringRef) -> String {
+    assert!(!cfstring.is_null());
+
     let string_len = sys::cfstring_get_length(cfstring);
 
     // This is effectively asking how big a buffer we are going to need
