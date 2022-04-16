@@ -235,6 +235,24 @@ extern "C" {
     #[link_name = "AudioFileClose"]
     pub fn audio_file_close(in_audio_file: AudioFileID) -> OSStatus;
 
+    /// Retrieve information about an audio file property.
+    ///
+    /// For a particular property of an audio file (specified by
+    /// `in_property_id` and `in_audio_file` respectively), fetch the
+    /// following:
+    /// - The size in bytes of the parameter, written to `out_data_size`.
+    /// - Whether or not the property is writable, written to `is_writable`.
+    ///   This value will equal 1 if true and zero if false.
+    ///
+    /// Returns an error if unsuccessful.
+    #[link_name = "AudioFileGetPropertyInfo"]
+    pub fn audio_file_get_proprty_info(
+        in_audio_file: AudioFileID,
+        in_property_id: AudioFilePropertyID,
+        out_data_size: *mut u32,
+        is_writable: *mut u32,
+    ) -> OSStatus;
+
     /// Get the value of an audio file property by copying it into a buffer.
     ///
     /// For the audio file indicated by the `in_audio_file`, fetches the
@@ -263,19 +281,37 @@ extern "C" {
         out_property_data: *mut c_void,
     ) -> OSStatus;
 
-    //TODO: Doc
-    /*
-        #[link_name = "AudioQueueNewOutput"]
-        fn audio_queue_new_output(
-            in_format: *const AudioStreamBasicDescription,
-            in_callback_proc: AudioQueueOutputCallback,
-            in_user_data: *const c_void,
-            in_callback_run_loop: CFRunLoopRef,
-            in_callback_run_loop_mode: CFStringRef,
-            in_flags: u32,
-            out_aq: *mut AudioQueueRef,
-        ) -> OSStatus;
-    */
+    /// Create a new audio queue for playback.
+    ///
+    /// The `in_format` parameter describes the format of the audio data to be
+    /// played back. Note that while compressed audio data is supported, non
+    /// interleaved PCM formats are not.
+    ///
+    /// The callback pointer to by `in_callback_proc` will be called once the
+    /// queue has finished aquiring a buffer. This callback will be passed
+    /// `in_user_data`, which can be used to supply custom data.
+    ///
+    /// The `in_callback_run_loop` parameter can optionally be used to provide a
+    /// CFRunLoop to invoke the callback. Passing null will instead result
+    /// in the callback being invoked from one of the queues internal threads.
+    /// If a CFRunLoop is used, `in_callback_run_loop_mode` will determine the
+    /// run loop mode.
+    ///
+    /// Currently `in_flags` is not used, and must be set to 0.
+    ///
+    /// Once this function has been executed, the reference pointed to by the
+    /// `out_aq` parameter will contain the newly created queue. If creating
+    /// a new queue fails, an error will be returned.
+    #[link_name = "AudioQueueNewOutput"]
+    fn audio_queue_new_output(
+        in_format: *const AudioStreamBasicDescription,
+        in_callback_proc: AudioQueueOutputCallback,
+        in_user_data: *const c_void,
+        in_callback_run_loop: CFRunLoopRef,
+        in_callback_run_loop_mode: CFStringRef,
+        in_flags: u32,
+        out_aq: *mut AudioQueueRef,
+    ) -> OSStatus;
 }
 
 /// A reference to an opaque CFURL object.
@@ -286,6 +322,9 @@ pub type CFDictionaryRef = *const CFDictionary;
 
 /// A reference to an opaque CFString object.
 pub type CFStringRef = *const CFString;
+
+/// A reference to an opaque CFRunLoop object.
+pub type CFRunLoopRef = *const CFRunLoop;
 
 /// Specifies a particular string encoding.
 ///
@@ -314,9 +353,11 @@ extern "C" {
     /// Core Foundation Dictionary, holds data in key value pairs.
     pub type CFDictionary;
 
-    /// Core Foundation String, facilitates various string manipulation
-    /// functionality.
+    /// Core Foundation String, exposes various string manipulation features.
     pub type CFString;
+
+    /// Core Foundation run loop, dispatches control in response to inputs.
+    pub type CFRunLoop;
 
     /// Get the number of key value pairs stored in a `CFDictionary`.
     ///
