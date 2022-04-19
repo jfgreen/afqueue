@@ -118,8 +118,9 @@ impl AudioFile {
             );
 
             // Copy into Rust strings
-            let keys = keys.into_iter().map(|k| cfstring_to_string(k));
-            let values = values.into_iter().map(|v| cfstring_to_string(v));
+            // Note: We use collect to process each cfstring before releasing the dict
+            let keys: Vec<String> = keys.into_iter().map(|k| cfstring_to_string(k)).collect();
+            let values: Vec<String> = values.into_iter().map(|v| cfstring_to_string(v)).collect();
             let properties = keys.into_iter().zip(values);
 
             //TODO: Do we also have to release the contents of the dictionary?
