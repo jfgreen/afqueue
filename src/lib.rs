@@ -158,8 +158,23 @@ impl AudioFile {
 pub fn play(path: String) -> Result<(), PlaybackError> {
     let audio_file = AudioFile::open(path)?;
     audio_file.print_properties()?;
+
     let basic_description = audio_file.get_basic_description()?;
-    println!("{basic_description:?}");
+    println!("Audio format: {basic_description:?}");
+
+    unsafe {
+        let mut output_queue = MaybeUninit::uninit();
+        let error = sys::audio_queue_new_output(
+            &basic_description,
+            output_callback,
+            ptr::null_mut() as *mut c_void, // Callback data
+            0 as *const _,                  // Run loop
+            0 as *const _,                  // Run loop mode
+            0,                              // flags
+            output_queue.as_mut_ptr(),
+        );
+        println!("{error}");
+    }
 
     audio_file.close()?;
     Ok(())
@@ -234,4 +249,11 @@ unsafe fn read_audio_file_property<T>(
     assert!(data_size == mem::size_of::<T>() as u32);
 
     return Ok(data);
+}
+
+extern "C" fn output_callback(
+    user_data: *mut c_void,
+    audio_queue: sys::AudioQueueRef,
+    buffer: sys::AudioQueueBufferRef,
+) {
 }

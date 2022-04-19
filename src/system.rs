@@ -303,10 +303,10 @@ extern "C" {
     /// `out_aq` parameter will contain the newly created queue. If creating
     /// a new queue fails, an error will be returned.
     #[link_name = "AudioQueueNewOutput"]
-    fn audio_queue_new_output(
+    pub fn audio_queue_new_output(
         in_format: *const AudioStreamBasicDescription,
         in_callback_proc: AudioQueueOutputCallback,
-        in_user_data: *const c_void,
+        in_user_data: *mut c_void,
         in_callback_run_loop: CFRunLoopRef,
         in_callback_run_loop_mode: CFStringRef,
         in_flags: u32,
