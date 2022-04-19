@@ -101,16 +101,15 @@ impl AudioFile {
         }
     }
 
-    //TODO: Return properties instead
-    fn print_properties(&self) -> Result<(), PlaybackError> {
+    fn read_properties(&self) -> Result<impl Iterator<Item = (String, String)>, PlaybackError> {
         unsafe {
             let info_dict =
                 read_audio_file_property(self.file_id, sys::AUDIO_FILE_PROPERTY_INFO_DICTIONARY)?;
 
             // Extract keys and values
             let count = sys::cfdictionary_get_count(info_dict);
-            let mut keys = vec![0 as *const _; count as usize];
-            let mut values = vec![0 as *const _; count as usize];
+            let mut keys = vec![0 as sys::CFStringRef; count as usize];
+            let mut values = vec![0 as sys::CFStringRef; count as usize];
 
             sys::cfdictionary_get_keys_and_values(
                 info_dict,
@@ -118,29 +117,19 @@ impl AudioFile {
                 values.as_mut_ptr() as *mut *const c_void,
             );
 
-            // Convert to Rust strings
-            println!("keys:");
-            for k in keys {
-                let s = cfstring_to_string(k);
-                println!("{s}");
-            }
-
-            println!("\nvalues:");
-            for v in values {
-                let s = cfstring_to_string(v);
-                println!("{s}");
-            }
+            // Copy into Rust strings
+            let keys = keys.into_iter().map(|k| cfstring_to_string(k));
+            let values = values.into_iter().map(|v| cfstring_to_string(v));
+            let properties = keys.into_iter().zip(values);
 
             //TODO: Do we also have to release the contents of the dictionary?
             sys::cf_release(info_dict as *const c_void);
 
-            println!("count: {count}");
+            Ok(properties)
         }
-
-        Ok(())
     }
 
-    fn get_basic_description(&self) -> Result<sys::AudioStreamBasicDescription, PlaybackError> {
+    fn read_basic_description(&self) -> Result<sys::AudioStreamBasicDescription, PlaybackError> {
         unsafe { read_audio_file_property(self.file_id, sys::AUDIO_FILE_PROPERTY_DATA_FORMAT) }
     }
 
@@ -157,10 +146,14 @@ impl AudioFile {
 
 pub fn play(path: String) -> Result<(), PlaybackError> {
     let audio_file = AudioFile::open(path)?;
-    audio_file.print_properties()?;
 
-    let basic_description = audio_file.get_basic_description()?;
-    println!("Audio format: {basic_description:?}");
+    println!("Properties:");
+    for (k, v) in audio_file.read_properties()? {
+        println!("{k}: {v}");
+    }
+
+    let basic_description = audio_file.read_basic_description()?;
+    println!("\nAudio format:\n{basic_description:#?}");
 
     unsafe {
         let mut output_queue = MaybeUninit::uninit();
