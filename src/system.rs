@@ -31,6 +31,9 @@ pub type AudioFileTypeID = u32;
 /// Constant value identifying an audio file property.
 pub type AudioFilePropertyID = u32;
 
+/// Constant value identifying an audio queue property.
+pub type AudioQueuePropertyID = u32;
+
 /// Determines if an audio file should be readable, writable or both.
 pub type AudioFilePermissions = i8;
 
@@ -42,19 +45,33 @@ pub const AUDIO_FILE_READ_PERMISSION: i8 = 1;
 /// This constant can be used with `audio_file_get_property` to obtain a Core
 /// Foundation dictionary containing information describing an audio file.
 ///
+/// The value of this property is represented by an CFDictionaryRef.
+///
 /// The caller is responsable for releasing the dictionary via `cf_release`.
 pub const AUDIO_FILE_PROPERTY_INFO_DICTIONARY: u32 = u32::from_be_bytes(*b"info");
 
 /// Constant used to interact with an audio files format description.
 ///
-/// Using this constant with `audio_file_get_property` will return an
-/// AudioStreamBasicDescription describing the files audio format.
+/// Using this constant with `audio_file_get_property` will return a description
+/// of the files audio format.
+///
+/// The value of this property is represented by an AudioStreamBasicDescription.
 pub const AUDIO_FILE_PROPERTY_DATA_FORMAT: u32 = u32::from_be_bytes(*b"dfmt");
 
 /// Constant used to interact with an audio files cookie data.
 ///
-/// Magic cookie data encodes format specific data
-pub const AUDIO_FILE_PROPERT_MAGIC_COOKIE_DATA: u32 = u32::from_be_bytes(*b"mgic");
+/// Magic cookie data encodes format specific data.
+///
+/// The value of this property is represented by a pointer.
+pub const AUDIO_FILE_PROPERTY_MAGIC_COOKIE_DATA: u32 = u32::from_be_bytes(*b"mgic");
+
+/// Constant used to interact with an audio queues cookie data.
+///
+/// If an audio format requires a magic cookie, then this property must be set
+/// before any buffers are enqueued.
+///
+/// The value of this property is represented by a pointer.
+pub const AUDIO_QUEUE_PROPERTY_MAGIC_COOKIE_DATA: u32 = u32::from_be_bytes(*b"aqmc");
 
 /// A reference to an opaque type representing an audio queue object.
 ///
@@ -316,6 +333,22 @@ extern "C" {
         in_callback_run_loop_mode: CFStringRef,
         in_flags: u32,
         out_aq: *mut AudioQueueRef,
+    ) -> OSStatus;
+
+    /// Set a property of an audio queue.
+    ///
+    /// For the audio queue specified by `in_aq`, set the `in_id` property.
+    ///
+    /// The property and its size are supplied by the `in_data` and
+    /// `in_data_size` parameters respectively.
+    ///
+    /// Returns an error if unsuccessful.
+    #[link_name = "AudioQueueSetProperty"]
+    pub fn audio_queue_set_property(
+        in_aq: AudioQueueRef,
+        in_id: AudioQueuePropertyID,
+        in_data: *const c_void,
+        in_data_size: u32,
     ) -> OSStatus;
 }
 

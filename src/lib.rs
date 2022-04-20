@@ -21,6 +21,7 @@ pub enum PlaybackError {
     FailedToReadFileProperty(sys::OSStatus),
     FailedToReadFilePropertyInfo(sys::OSStatus),
     FailedToCreateAudioQueue(sys::OSStatus),
+    FailedToSetAudioQueueProperty(sys::OSStatus),
 }
 
 impl From<NulError> for PlaybackError {
@@ -51,7 +52,14 @@ impl fmt::Display for PlaybackError {
                 write!(f, "Failed to read file property, OSStatus: {}", status)
             }
             PlaybackError::FailedToCreateAudioQueue(status) => {
-                write!(f, "Failed to create audio queue OSStatus: {}", status)
+                write!(f, "Failed to create audio queue, OSStatus: {}", status)
+            }
+            PlaybackError::FailedToSetAudioQueueProperty(status) => {
+                write!(
+                    f,
+                    "Failed to set audio queue property, OSStatus: {}",
+                    status
+                )
             }
         }
     }
@@ -149,7 +157,7 @@ impl AudioFile {
             let mut is_writable: u32 = 0;
             let status = sys::audio_file_get_property_info(
                 self.file_id,
-                sys::AUDIO_FILE_PROPERT_MAGIC_COOKIE_DATA,
+                sys::AUDIO_FILE_PROPERTY_MAGIC_COOKIE_DATA,
                 &mut cookie_size as *mut _,
                 &mut is_writable as *mut _,
             );
@@ -170,7 +178,7 @@ impl AudioFile {
 
             let status = sys::audio_file_get_property(
                 self.file_id,
-                sys::AUDIO_FILE_PROPERT_MAGIC_COOKIE_DATA,
+                sys::AUDIO_FILE_PROPERTY_MAGIC_COOKIE_DATA,
                 &mut data_size as *mut _,
                 cookie_data.as_mut_ptr() as *mut c_void,
             );
@@ -227,6 +235,17 @@ pub fn play(path: String) -> Result<(), PlaybackError> {
         // Copy magic cookie data to audio queue
         if let Some(cookie) = audio_file.read_magic_cookie()? {
             println!("Magic cookie is {} bytes", cookie.len());
+
+            let status = sys::audio_queue_set_property(
+                output_queue,
+                system::AUDIO_QUEUE_PROPERTY_MAGIC_COOKIE_DATA,
+                cookie.as_ptr() as *const c_void,
+                cookie.len() as u32,
+            );
+
+            if status != 0 {
+                return Err(PlaybackError::FailedToSetAudioQueueProperty(status));
+            }
         }
     }
 
