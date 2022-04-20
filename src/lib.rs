@@ -19,6 +19,8 @@ pub enum PlaybackError {
     FailedToOpenAudioFile(sys::OSStatus),
     FailedToCloseAudioFile(sys::OSStatus),
     FailedToReadFileProperty(sys::OSStatus),
+    FailedToReadFilePropertyInfo(sys::OSStatus),
+    FailedToCreateAudioQueue(sys::OSStatus),
 }
 
 impl From<NulError> for PlaybackError {
@@ -44,6 +46,12 @@ impl fmt::Display for PlaybackError {
             }
             PlaybackError::FailedToReadFileProperty(status) => {
                 write!(f, "Failed to read file property, OSStatus: {}", status)
+            }
+            PlaybackError::FailedToReadFilePropertyInfo(status) => {
+                write!(f, "Failed to read file property, OSStatus: {}", status)
+            }
+            PlaybackError::FailedToCreateAudioQueue(status) => {
+                write!(f, "Failed to create audio queue OSStatus: {}", status)
             }
         }
     }
@@ -134,6 +142,48 @@ impl AudioFile {
         unsafe { read_audio_file_property(self.file_id, sys::AUDIO_FILE_PROPERTY_DATA_FORMAT) }
     }
 
+    fn read_magic_cookie(&self) -> Result<Option<Vec<u8>>, PlaybackError> {
+        unsafe {
+            // Check to see if there is a cookie, and if so how large it is.
+            let mut cookie_size: u32 = 0;
+            let mut is_writable: u32 = 0;
+            let status = sys::audio_file_get_property_info(
+                self.file_id,
+                sys::AUDIO_FILE_PROPERT_MAGIC_COOKIE_DATA,
+                &mut cookie_size as *mut _,
+                &mut is_writable as *mut _,
+            );
+
+            // No magic cookie data
+            if status == i32::from_be_bytes(*b"pty?") {
+                return Ok(None);
+            }
+
+            // Some other status is probably an error
+            if status != 0 {
+                return Err(PlaybackError::FailedToReadFilePropertyInfo(status));
+            }
+
+            // Read the cookie
+            let mut cookie_data: Vec<u8> = vec![0; cookie_size as usize];
+            let mut data_size = cookie_size;
+
+            let status = sys::audio_file_get_property(
+                self.file_id,
+                sys::AUDIO_FILE_PROPERT_MAGIC_COOKIE_DATA,
+                &mut data_size as *mut _,
+                cookie_data.as_mut_ptr() as *mut c_void,
+            );
+
+            if status != 0 {
+                return Err(PlaybackError::FailedToReadFileProperty(status));
+            }
+
+            assert!(data_size == cookie_size);
+            Ok(Some(cookie_data))
+        }
+    }
+
     fn close(self) -> Result<(), PlaybackError> {
         unsafe {
             let status = sys::audio_file_close(self.file_id);
@@ -157,8 +207,9 @@ pub fn play(path: String) -> Result<(), PlaybackError> {
     println!("\nAudio format:\n{basic_description:#?}");
 
     unsafe {
+        // Create output audio queue
         let mut output_queue = MaybeUninit::uninit();
-        let error = sys::audio_queue_new_output(
+        let status = sys::audio_queue_new_output(
             &basic_description,
             output_callback,
             ptr::null_mut() as *mut c_void, // Callback data
@@ -167,7 +218,16 @@ pub fn play(path: String) -> Result<(), PlaybackError> {
             0,                              // flags
             output_queue.as_mut_ptr(),
         );
-        println!("{error}");
+
+        if status != 0 {
+            return Err(PlaybackError::FailedToCreateAudioQueue(status));
+        }
+        let output_queue = output_queue.assume_init();
+
+        // Copy magic cookie data to audio queue
+        if let Some(cookie) = audio_file.read_magic_cookie()? {
+            println!("Magic cookie is {} bytes", cookie.len());
+        }
     }
 
     audio_file.close()?;
