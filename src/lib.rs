@@ -150,6 +150,15 @@ impl AudioFile {
         unsafe { read_audio_file_property(self.file_id, sys::AUDIO_FILE_PROPERTY_DATA_FORMAT) }
     }
 
+    fn read_packet_size_upper_bound(&self) -> Result<u32, PlaybackError> {
+        unsafe {
+            read_audio_file_property(
+                self.file_id,
+                sys::AUDIO_FILE_PROPERTY_PACKET_SIZE_UPPER_BOUND,
+            )
+        }
+    }
+
     fn read_magic_cookie(&self) -> Result<Option<Vec<u8>>, PlaybackError> {
         unsafe {
             // Check to see if there is a cookie, and if so how large it is.
@@ -247,6 +256,10 @@ pub fn play(path: String) -> Result<(), PlaybackError> {
                 return Err(PlaybackError::FailedToSetAudioQueueProperty(status));
             }
         }
+
+        // Figure out how big each buffer needs to be
+        let upper_bound = audio_file.read_packet_size_upper_bound()?;
+        println!("packet upper bound: {upper_bound} bytes");
     }
 
     audio_file.close()?;

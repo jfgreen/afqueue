@@ -65,6 +65,15 @@ pub const AUDIO_FILE_PROPERTY_DATA_FORMAT: u32 = u32::from_be_bytes(*b"dfmt");
 /// The value of this property is represented by a pointer.
 pub const AUDIO_FILE_PROPERTY_MAGIC_COOKIE_DATA: u32 = u32::from_be_bytes(*b"mgic");
 
+/// Constant used to read a files theoretical maximum packet size.
+///
+/// Using this constant with `audio_file_get_property` will return the
+/// theoretical maximum packet size for the type of audio file. This avoids
+/// having to scan the entire audio file to find the actual largest packet.
+///
+/// The value of this property is represented as a u32.
+pub const AUDIO_FILE_PROPERTY_PACKET_SIZE_UPPER_BOUND: u32 = u32::from_be_bytes(*b"pkub");
+
 /// Constant used to interact with an audio queues cookie data.
 ///
 /// If an audio format requires a magic cookie, then this property must be set
