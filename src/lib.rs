@@ -4,6 +4,7 @@
 
 #![feature(extern_types)]
 
+use std::cmp;
 use std::ffi::{c_void, CString, NulError};
 use std::fmt;
 use std::mem::{self, MaybeUninit};
@@ -12,6 +13,10 @@ use std::ptr;
 mod system;
 
 use system as sys;
+
+const LOWER_BUFFER_SIZE_HINT: u32 = 0x4000;
+const UPPER_BUFFER_SIZE_HINT: u32 = 0x20000;
+const BUFFER_SECONDS_HINT: f64 = 0.5;
 
 pub enum PlaybackError {
     PathContainsInteriorNull(NulError),
@@ -212,6 +217,10 @@ impl AudioFile {
     }
 }
 
+// TODO: Use kAudioFilePropertyFormatList to deal with multi format files?
+
+// TODO: Query the files channel layout to handle multi channel files?
+
 pub fn play(path: String) -> Result<(), PlaybackError> {
     let audio_file = AudioFile::open(path)?;
 
@@ -257,9 +266,38 @@ pub fn play(path: String) -> Result<(), PlaybackError> {
             }
         }
 
-        // Figure out how big each buffer needs to be
-        let upper_bound = audio_file.read_packet_size_upper_bound()?;
-        println!("packet upper bound: {upper_bound} bytes");
+        // Use
+        //  - the theoretical max size of a packet of this format
+        //  - some heuristics
+        //  - a desired buffer duration (aproximate)
+        // to determine
+        // - how big each buffer needs to be
+        // - how many packet to read each time we fill a buffer
+
+        //TODO: Write some tests for this calculation
+        let max_packet_size = audio_file.read_packet_size_upper_bound()?;
+
+        // If there can be a packet larger than the upper hint, use that as the limit
+        // to ensuring there is at least enough space for a single packet.
+        // TODO: Can this logic be made easier to follow? - use a match?
+        let upper_buffer_limit = cmp::max(max_packet_size, UPPER_BUFFER_SIZE_HINT);
+
+        let buffer_size: u32 = if basic_description.frames_per_packet != 0 {
+            // If frames per packet are known, tailor the buffer size.
+            let frames = basic_description.sample_rate * BUFFER_SECONDS_HINT;
+            let packets = (frames / (basic_description.frames_per_packet as f64)).ceil() as u32;
+            let size = packets * max_packet_size;
+            let size = cmp::max(size, LOWER_BUFFER_SIZE_HINT);
+            let size = cmp::min(size, upper_buffer_limit);
+            size
+        } else {
+            // If frames per packet is not known, fallback to something large enough
+            upper_buffer_limit
+        };
+
+        println!("buffer_size: {buffer_size} bytes");
+        let packets_per_buffer: u32 = buffer_size / max_packet_size;
+        println!("packets_per_buffer: {packets_per_buffer}");
     }
 
     audio_file.close()?;

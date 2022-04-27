@@ -132,21 +132,21 @@ pub type AudioFormatFlags = u32;
 #[repr(C)]
 pub struct AudioStreamBasicDescription {
     /// Number of frames per second of uncompressed (or decompressed) audio.
-    sample_rate: f64,
+    pub sample_rate: f64,
     /// General kind of data in the stream.
-    format_id: AudioFormatID,
+    pub format_id: AudioFormatID,
     /// Flags for the format indicated by format_id.
-    format_flags: AudioFormatFlags,
+    pub format_flags: AudioFormatFlags,
     /// Number of bytes in each packet.
-    bytes_per_packet: u32,
+    pub bytes_per_packet: u32,
     /// Number of sample frames in each packet.
-    frames_per_packet: u32,
+    pub frames_per_packet: u32,
     /// Number of bytes in a sample frame.
-    bytes_per_frame: u32,
+    pub bytes_per_frame: u32,
     /// Number of channels in each frame of data.
-    channels_per_frame: u32,
+    pub channels_per_frame: u32,
     /// Number of bits of sample data for each channel.
-    bits_per_channel: u32,
+    pub bits_per_channel: u32,
     /// Pads out the structure to force an even 8 byte alignment
     reserved: u32,
 }
