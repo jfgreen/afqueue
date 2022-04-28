@@ -160,6 +160,7 @@ pub struct AudioStreamBasicDescription {
 /// channels are of unequal size. In these scenarios
 /// `AudioStreamPacketDescription` supplements the information in
 /// `AudioStreamBasicDescription`.
+#[derive(Debug, Default, Clone)]
 #[repr(C)]
 pub struct AudioStreamPacketDescription {
     /// The number of bytes from the start of the buffer to the packet

@@ -15,7 +15,7 @@ mod system;
 use system as sys;
 
 const LOWER_BUFFER_SIZE_HINT: u32 = 0x4000;
-const UPPER_BUFFER_SIZE_HINT: u32 = 0x20000;
+const UPPER_BUFFER_SIZE_HINT: u32 = 0x50000;
 const BUFFER_SECONDS_HINT: f64 = 0.5;
 
 pub enum PlaybackError {
@@ -229,14 +229,14 @@ pub fn play(path: String) -> Result<(), PlaybackError> {
         println!("{k}: {v}");
     }
 
-    let basic_description = audio_file.read_basic_description()?;
-    println!("\nAudio format:\n{basic_description:#?}");
+    let format = audio_file.read_basic_description()?;
+    println!("\nAudio format:\n{format:#?}");
 
     unsafe {
         // Create output audio queue
         let mut output_queue = MaybeUninit::uninit();
         let status = sys::audio_queue_new_output(
-            &basic_description,
+            &format,
             output_callback,
             ptr::null_mut() as *mut c_void, // Callback data
             0 as *const _,                  // Run loop
@@ -277,27 +277,37 @@ pub fn play(path: String) -> Result<(), PlaybackError> {
         //TODO: Write some tests for this calculation
         let max_packet_size = audio_file.read_packet_size_upper_bound()?;
 
-        // If there can be a packet larger than the upper hint, use that as the limit
-        // to ensuring there is at least enough space for a single packet.
-        // TODO: Can this logic be made easier to follow? - use a match?
-        let upper_buffer_limit = cmp::max(max_packet_size, UPPER_BUFFER_SIZE_HINT);
-
-        let buffer_size: u32 = if basic_description.frames_per_packet != 0 {
+        let buffer_size: u32 = if format.frames_per_packet != 0 {
             // If frames per packet are known, tailor the buffer size.
-            let frames = basic_description.sample_rate * BUFFER_SECONDS_HINT;
-            let packets = (frames / (basic_description.frames_per_packet as f64)).ceil() as u32;
+            let frames = format.sample_rate * BUFFER_SECONDS_HINT;
+            let packets = (frames / (format.frames_per_packet as f64)).ceil() as u32;
             let size = packets * max_packet_size;
             let size = cmp::max(size, LOWER_BUFFER_SIZE_HINT);
-            let size = cmp::min(size, upper_buffer_limit);
+            let size = cmp::min(size, UPPER_BUFFER_SIZE_HINT);
             size
         } else {
             // If frames per packet is not known, fallback to something large enough
-            upper_buffer_limit
+            cmp::max(max_packet_size, UPPER_BUFFER_SIZE_HINT)
         };
 
         println!("buffer_size: {buffer_size} bytes");
         let packets_per_buffer: u32 = buffer_size / max_packet_size;
         println!("packets_per_buffer: {packets_per_buffer}");
+
+        // If format is VBR, allocate memory for packet array.
+
+        let is_vbr = format.bytes_per_packet == 0 || format.frames_per_packet == 0;
+        let packet_descs = if is_vbr {
+            Some(vec![
+                sys::AudioStreamPacketDescription::default();
+                packets_per_buffer as usize
+            ])
+        } else {
+            None
+        };
+
+        //TODO: Prime queue?
+        //TODO: Stop and reset in between files?
     }
 
     audio_file.close()?;
