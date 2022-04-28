@@ -160,7 +160,7 @@ pub struct AudioStreamBasicDescription {
 /// channels are of unequal size. In these scenarios
 /// `AudioStreamPacketDescription` supplements the information in
 /// `AudioStreamBasicDescription`.
-#[derive(Debug, Default, Clone)]
+#[derive(Debug)]
 #[repr(C)]
 pub struct AudioStreamPacketDescription {
     /// The number of bytes from the start of the buffer to the packet
@@ -178,13 +178,16 @@ pub type AudioQueueBufferRef = *mut AudioQueueBuffer;
 /// A buffer of audio data associated with an audio queue.
 /// Each audio queue manages a set of these buffers.
 ///
+/// The responsibility for filling or consuming the buffer depends on whether
+/// the queue is recording or playing back audio.
+///
 /// The buffer size, indicated by `audio_data_bytes_capacity` is set when the
 /// buffer is allocated, and can not be changed.
 ///
-/// When providing buffers to an output audio queue for playback, you must set
-/// `packet_description_count` and `audio_data_byte_size`. Conversely, when
-/// receiving buffers from a recording queue, these values will be instead set
-/// by the audio queue.
+/// To use the `packet_description_capacity`, `packet_descriptions`, and
+/// `packet_description_count` fields to describe a VBR formats
+/// `AudioPacketDescriptions`, the buffer must be created with
+/// `audio_queue_allocate_buffer_with_packet_descriptions`.
 ///
 /// Note: While it's possible to write to the data pointed to by the
 /// `audio_data` field the pointer address itself must not be changed.
@@ -360,6 +363,24 @@ extern "C" {
         in_data: *const c_void,
         in_data_size: u32,
     ) -> OSStatus;
+
+    /// Allocate a buffer with space for packet descriptions.
+    ///
+    /// For the audio queue specified by `in_aq`, create a buffer with
+    /// `in_buffer_bytes_size` buffer capacity, and
+    /// `in_number_packet_descriptions` worth of packet descriptions.
+    ///
+    /// On return, the reference pointed to by the `out_buffer` parameter will
+    /// point to the newly created audio buffer.
+    ///
+    /// Returns an error if unsuccessful.
+    #[link_name = "AudioQueueAllocateBufferWithPacketDescriptions"]
+    pub fn audio_queue_allocate_buffer_with_packet_descriptions(
+        in_aq: AudioQueueRef,
+        in_buffer_bytes_size: u32,
+        in_number_packet_descriptions: u32,
+        out_buffer: *mut AudioQueueBufferRef,
+    ) -> OSStatus;
 }
 
 /// A reference to an opaque CFURL object.
@@ -458,7 +479,7 @@ extern "C" {
     /// specified encoding.
     ///
     /// For the Core Foundation string referenced by the `string_ref` parameter,
-    /// extract the range of characters specificed by `range`, into `buffer`
+    /// extract the range of characters specified by `range`, into `buffer`
     /// using the encoding indicated by `encoding`.
     ///
     /// Note, this function requries you to follow these constraints:

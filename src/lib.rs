@@ -17,6 +17,7 @@ use system as sys;
 const LOWER_BUFFER_SIZE_HINT: u32 = 0x4000;
 const UPPER_BUFFER_SIZE_HINT: u32 = 0x50000;
 const BUFFER_SECONDS_HINT: f64 = 0.5;
+const BUFFER_COUNT: usize = 3;
 
 pub enum PlaybackError {
     PathContainsInteriorNull(NulError),
@@ -27,6 +28,7 @@ pub enum PlaybackError {
     FailedToReadFilePropertyInfo(sys::OSStatus),
     FailedToCreateAudioQueue(sys::OSStatus),
     FailedToSetAudioQueueProperty(sys::OSStatus),
+    FailedToAllocateBuffer(sys::OSStatus),
 }
 
 impl From<NulError> for PlaybackError {
@@ -65,6 +67,9 @@ impl fmt::Display for PlaybackError {
                     "Failed to set audio queue property, OSStatus: {}",
                     status
                 )
+            }
+            PlaybackError::FailedToAllocateBuffer(status) => {
+                write!(f, "Failed to allocate buffer, OSStatus: {}", status)
             }
         }
     }
@@ -294,20 +299,27 @@ pub fn play(path: String) -> Result<(), PlaybackError> {
         let packets_per_buffer: u32 = buffer_size / max_packet_size;
         println!("packets_per_buffer: {packets_per_buffer}");
 
-        // If format is VBR, allocate memory for packet array.
-
         let is_vbr = format.bytes_per_packet == 0 || format.frames_per_packet == 0;
-        let packet_descs = if is_vbr {
-            Some(vec![
-                sys::AudioStreamPacketDescription::default();
-                packets_per_buffer as usize
-            ])
-        } else {
-            None
-        };
+        let packet_description_count = if is_vbr { packets_per_buffer } else { 0 };
+
+        let buffers = vec![MaybeUninit::uninit(); BUFFER_COUNT]
+            .into_iter()
+            .map(|mut buffer_ref| {
+                let status = sys::audio_queue_allocate_buffer_with_packet_descriptions(
+                    output_queue,
+                    buffer_size,
+                    packet_description_count,
+                    buffer_ref.as_mut_ptr(),
+                );
+                if status == 0 {
+                    Ok(buffer_ref.assume_init())
+                } else {
+                    Err(PlaybackError::FailedToAllocateBuffer(status))
+                }
+            })
+            .collect::<Result<Vec<sys::AudioQueueBufferRef>, PlaybackError>>()?;
 
         //TODO: Prime queue?
-        //TODO: Stop and reset in between files?
     }
 
     audio_file.close()?;
