@@ -75,14 +75,14 @@ impl fmt::Display for PlaybackError {
     }
 }
 
-//struct PlaybackState {
-//playing_file, sys::AudioFileID,
-//current_packet: u64, // TODO: Does this have to be i64?
-//bytes_to_read: u32,
-//packets_to_read: u32,
-//packet_descriptions: *const AudioStreamPacketDescription,
-//boolean: finished,
-//}
+struct PlaybackState {
+    playing_file: AudioFile,
+    //current_packet: u64, // TODO: Does this have to be i64?
+    //bytes_to_read: u32,
+    //packets_to_read: u32,
+    //packet_descriptions: *const AudioStreamPacketDescription,
+    //boolean: finished,
+}
 
 struct AudioFile {
     file_id: sys::AudioFileID,
@@ -237,6 +237,7 @@ pub fn play(path: String) -> Result<(), PlaybackError> {
     let format = audio_file.read_basic_description()?;
     println!("\nAudio format:\n{format:#?}");
 
+    //TODO: How to package this up into an AudioQueue abstraction?
     unsafe {
         // Create output audio queue
         let mut output_queue = MaybeUninit::uninit();
@@ -302,6 +303,7 @@ pub fn play(path: String) -> Result<(), PlaybackError> {
         let is_vbr = format.bytes_per_packet == 0 || format.frames_per_packet == 0;
         let packet_description_count = if is_vbr { packets_per_buffer } else { 0 };
 
+        //TODO: Double check what these buffer references are needed for
         let buffers = vec![MaybeUninit::uninit(); BUFFER_COUNT]
             .into_iter()
             .map(|mut buffer_ref| {

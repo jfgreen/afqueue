@@ -7,6 +7,8 @@
 
 use std::ffi::c_void;
 
+//TODO: Consider if we want to explicity alias type Boolean = u8;
+
 /// A type free reference to an opaque Core Foundation object.
 ///
 /// This type is accepted by polymorphic functions like `cf_release`.
@@ -314,6 +316,45 @@ extern "C" {
         in_property_id: AudioFilePropertyID,
         io_data_size: *mut u32,
         out_property_data: *mut c_void,
+    ) -> OSStatus;
+
+    /// Read packets of data from an audio file.
+    ///
+    /// Request that `io_num_packets` worth of packets be read from the audio
+    /// file `in_audio_file` into the buffer pointed to by `out_buffer`.
+    ///
+    /// If the requested number of packets exceed the capacity of the provided
+    /// buffer, this function will write as many packets as can be safely
+    /// fit in the space provided. On return, `io_num_packets` will contain
+    /// the number of packets actually read.
+    ///
+    /// Use `in_starting_packet` to indicate the packet index to start reading
+    /// from.
+    ///
+    /// The `io_num_bytes` parameter should on input contain the size of
+    /// `out_buffer` in bytes. On return, it will contain the number of
+    /// bytes bytes actually written.
+    ///
+    /// The `out_packet_descriptions` parameter can be used to obtain a
+    /// description of each packet. This is typcially necessary to interpret
+    /// variable bit rate formats. Pass null if file contains constant bit
+    /// rate data.
+    ///
+    /// To enable caching of the data upon read, set `in_use_cache` to true.
+    ///
+    /// This function will return `AUDIO_FILE_END_OF_FILE_ERROR` when the end of
+    /// the file is encountered. In this situation the `io_num_packets` and
+    /// `io_num_bytes` parameters will reflect if this resulted less data being
+    /// read.
+    #[link_name = "AudioFileReadPacketData"]
+    pub fn audio_file_read_packet_data(
+        in_audio_file: AudioFileID,
+        in_use_cache: bool,
+        io_num_bytes: *mut u32,
+        out_packet_descriptions: *mut AudioStreamPacketDescription,
+        in_starting_packet: i64,
+        io_num_packets: u32,
+        out_buffer: *mut c_void,
     ) -> OSStatus;
 
     /// Create a new audio queue for playback.
