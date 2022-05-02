@@ -235,6 +235,57 @@ pub type AudioQueueOutputCallback = unsafe extern "C" fn(
     in_buffer: AudioQueueBufferRef,
 );
 
+/// Flags describing the type of SMPTE time.
+pub type SMPTETimeType = u32;
+
+/// Flags describing the SMPTE time state.
+pub type SMPTETimeFlags = u32;
+
+/// A structure representing a SMPTE time.
+#[repr(C)]
+struct SMPTETime {
+    /// Number of subframes in the full message.
+    subframes: i16,
+    /// Number of subframes per frame.
+    subframe_divisor: i16,
+    ///  The total number of messages recieved.
+    counter: u32,
+    /// The kind of SMPTE time using the SMPTE time type constants.
+    smpte_type: SMPTETimeType,
+    ///  A set of flags that inidcate the SMPTE state.
+    smpte_flags: SMPTETimeFlags,
+    /// Number of hours in the full message.
+    hours: i16,
+    /// Number of minutes in the full message.
+    minutes: i16,
+    /// Number of seconds in the full message.
+    seconds: i16,
+    /// Number of frames in the full message.
+    frames: i16,
+}
+
+/// Flags indicating which fields in `AudioTimeStamp` structure are valid.
+pub type AudioTimeStampFlags = u32;
+
+#[repr(C)]
+// A structure holding different representations of a given point in time.
+struct AudioTimeStamp {
+    /// Absolute sample frame time.
+    sample_time: f64,
+    /// Host machines time base.
+    host_time: u64,
+    /// Ratio of actual to nominal host ticks per sample frame.
+    rate_scalar: f64,
+    /// World clock time.
+    world_clock_time: u64,
+    /// SMPTE time.
+    smpte_time: SMPTETime,
+    /// Flags indicating which representations are valid.
+    flags: u32,
+    /// Pads the structure out to force an even 8 byte alignment.
+    reserved: u32,
+}
+
 #[link(name = "AudioToolbox", kind = "framework")]
 extern "C" {
 
@@ -422,6 +473,90 @@ extern "C" {
         in_number_packet_descriptions: u32,
         out_buffer: *mut AudioQueueBufferRef,
     ) -> OSStatus;
+
+    /// Assign a buffer to an audio queue for recording or playback
+    ///
+    /// Present the audio queue `in_aq` with the buffer `in_buffer` for
+    /// processing.
+    ///
+    /// An input queue will fill this buffer with recorded audio data. Converses
+    /// an output queue will expect the caller to have filled the buffer with
+    /// audio data for playback.
+    ///
+    /// If playing back variable bit rate data, then `in_packet_descs` should
+    /// point to an array of packet descriptions and
+    /// `in_number_packet_descriptions` should inidcate the number of
+    /// descriptions conatined in this array.
+    ///
+    /// If the buffer was allocated with
+    /// `audio_queue_allocate_buffer_with_packet_descriptions` then packet
+    /// descriptions should be provided via the buffers `packet_descriptions`
+    /// and `packet_description_count` fields instead.
+    ///
+    /// If recording via an input queue, or providing packet descriptions via
+    /// the buffer, pass null to `in_packet_descs` and 0 to
+    /// `in_number_packet_descriptions`.
+    ///
+    /// Returns an error code on failure.
+    #[link_name = "AudioQueueEnqueueBuffer"]
+    pub fn audio_queue_enqueue_buffer(
+        in_aq: AudioQueueRef,
+        in_buffer: AudioQueueBufferRef,
+        in_number_packet_descriptions: u32,
+        in_packet_descs: *const AudioStreamPacketDescription,
+    ) -> OSStatus;
+
+    /// Begin playing or recording audio data.
+    ///
+    /// Start the audio queue `in_aq`.
+    ///
+    /// The caller can request that the audio queue starts as soon as possible
+    /// by passing null to `in_start_time`.
+    ///
+    /// To delay starting the queue, pass a timestamp of the desired start time
+    /// to to `in_start_time`.
+    ///
+    /// If the audio hardware is not already running, calling this function will
+    /// start it.
+    #[link_name = "AudioQueueStart"]
+    pub fn audio_queue_start(
+        in_aq: AudioQueueRef,
+        in_start_time: *const AudioTimeStamp,
+    ) -> OSStatus;
+
+    /// Stop playing or recording audio data.
+    ///
+    /// Stop the audio queue `in_aq`.
+    ///
+    /// Calling this function resets the audio queue. This stops the underlying
+    /// audio hardware, providing it is not still in use by other audio service.
+    ///
+    /// The `in_immediate` parameter will determine if the queue is stopped
+    /// synchronously or asynchronously. Passing in true will request an
+    /// immedate stop and the function will return synchronously once the audio
+    /// queue has finished. Passing in false will trigger an asynchronous
+    /// stop, in which the function returns right away but the
+    /// audio queue continues processing any queued buffers before stopping.
+    ///
+    /// Returns an error on failure.
+    #[link_name = "AudioQueueStop"]
+    pub fn audio_queue_stop(in_aq: AudioQueueRef, in_immediate: bool) -> OSStatus;
+
+    /// Dispose of an audio queue.
+    ///
+    /// Dispose of the audio queue `in_aq` and all of its associated resources,
+    /// such as buffers.
+    ///
+    /// The `in_immediate` parameter will determine if the queue is disposed of
+    /// synchronously or asynchronously. Passing in true will dispose of the
+    /// queue synchronously and the function will only return once disposal is
+    /// complete. Passing in false will asynchronously dispose of the queue
+    /// once all enqueued buffer are processed.
+    ///
+    /// Note: Once this function has been called, it is no longer possible to
+    /// interact with the audio queue.
+    #[link_name = "AudioQueueDispose"]
+    pub fn audio_queue_dispose(in_aq: AudioQueueRef, in_immediate: bool) -> OSStatus;
 }
 
 /// A reference to an opaque CFURL object.
