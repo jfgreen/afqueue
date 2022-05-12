@@ -166,12 +166,12 @@ pub struct AudioStreamBasicDescription {
 #[repr(C)]
 pub struct AudioStreamPacketDescription {
     /// The number of bytes from the start of the buffer to the packet
-    start_offset: i64,
+    pub start_offset: i64,
     /// The number of samples frames in the packet.
     /// This is 0 for formats with a constant number of frames per packet.
-    variable_frames_in_packet: u32,
+    pub variable_frames_in_packet: u32,
     /// The number of bytes in the packet.
-    data_byte_size: u32,
+    pub data_byte_size: u32,
 }
 
 /// A reference to an audio queue buffer.
@@ -196,19 +196,19 @@ pub type AudioQueueBufferRef = *mut AudioQueueBuffer;
 #[repr(C)]
 pub struct AudioQueueBuffer {
     /// The size of the audio queue buffer, in bytes.
-    audio_data_bytes_capacity: u32,
+    pub audio_data_bytes_capacity: u32,
     /// Pointer to audio data.
-    audio_data: *const c_void,
+    pub audio_data: *mut c_void,
     /// The number of bytes of audio data in the `audio_data` field.
-    audio_data_byte_size: u32,
+    pub audio_data_byte_size: u32,
     /// Custom data specified during audio queue creation.
-    user_data: *const c_void,
+    pub user_data: *const c_void,
     /// The max number of entries that can be stored in `packet_descriptions`.
-    packet_description_capacity: u32,
+    pub packet_description_capacity: u32,
     /// Pointer to an array of descriptions (when packet size varies).
-    packet_descriptions: *const AudioStreamPacketDescription,
+    pub packet_descriptions: *mut AudioStreamPacketDescription,
     /// The number of packet descriptions in the buffer.
-    packet_description_count: u32,
+    pub packet_description_count: u32,
 }
 
 /// Callback to respond when an output audio queue has a buffer to reuse.
@@ -243,45 +243,45 @@ pub type SMPTETimeFlags = u32;
 
 /// A structure representing a SMPTE time.
 #[repr(C)]
-struct SMPTETime {
+pub struct SMPTETime {
     /// Number of subframes in the full message.
-    subframes: i16,
+    pub subframes: i16,
     /// Number of subframes per frame.
-    subframe_divisor: i16,
+    pub subframe_divisor: i16,
     ///  The total number of messages recieved.
-    counter: u32,
+    pub counter: u32,
     /// The kind of SMPTE time using the SMPTE time type constants.
-    smpte_type: SMPTETimeType,
+    pub smpte_type: SMPTETimeType,
     ///  A set of flags that inidcate the SMPTE state.
-    smpte_flags: SMPTETimeFlags,
+    pub smpte_flags: SMPTETimeFlags,
     /// Number of hours in the full message.
-    hours: i16,
+    pub hours: i16,
     /// Number of minutes in the full message.
-    minutes: i16,
+    pub minutes: i16,
     /// Number of seconds in the full message.
-    seconds: i16,
+    pub seconds: i16,
     /// Number of frames in the full message.
-    frames: i16,
+    pub frames: i16,
 }
 
 /// Flags indicating which fields in `AudioTimeStamp` structure are valid.
 pub type AudioTimeStampFlags = u32;
 
+/// A structure holding different representations of a given point in time.
 #[repr(C)]
-// A structure holding different representations of a given point in time.
-struct AudioTimeStamp {
+pub struct AudioTimeStamp {
     /// Absolute sample frame time.
-    sample_time: f64,
+    pub sample_time: f64,
     /// Host machines time base.
-    host_time: u64,
+    pub host_time: u64,
     /// Ratio of actual to nominal host ticks per sample frame.
-    rate_scalar: f64,
+    pub rate_scalar: f64,
     /// World clock time.
-    world_clock_time: u64,
+    pub world_clock_time: u64,
     /// SMPTE time.
-    smpte_time: SMPTETime,
+    pub smpte_time: SMPTETime,
     /// Flags indicating which representations are valid.
-    flags: u32,
+    pub flags: AudioTimeStampFlags,
     /// Pads the structure out to force an even 8 byte alignment.
     reserved: u32,
 }
@@ -404,7 +404,7 @@ extern "C" {
         io_num_bytes: *mut u32,
         out_packet_descriptions: *mut AudioStreamPacketDescription,
         in_starting_packet: i64,
-        io_num_packets: u32,
+        io_num_packets: *mut u32,
         out_buffer: *mut c_void,
     ) -> OSStatus;
 
