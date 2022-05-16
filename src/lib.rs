@@ -268,6 +268,61 @@ fn output_queue_set_magic_cookie(
     }
 }
 
+fn output_queue_start_immediately(output_queue: sys::AudioQueueRef) -> Result<(), PlaybackError> {
+    unsafe {
+        let status = sys::audio_queue_start(output_queue, ptr::null());
+
+        if status == 0 {
+            Ok(())
+        } else {
+            Err(PlaybackError::FailedToStartAudioQueue(status));
+        }
+    }
+}
+
+fn calculate_buffer_size(format: &sys::AudioStreamBasicDescription, max_packet_size: u32) -> u32 {
+    //TODO: Write some tests for this calculation (if we decide to keep it)
+    if format.frames_per_packet != 0 {
+        // If frames per packet are known, tailor the buffer size.
+        let frames = format.sample_rate * BUFFER_SECONDS_HINT;
+        let packets = (frames / (format.frames_per_packet as f64)).ceil() as u32;
+        let size = packets * max_packet_size;
+        let size = cmp::max(size, LOWER_BUFFER_SIZE_HINT);
+        let size = cmp::min(size, UPPER_BUFFER_SIZE_HINT);
+        size
+    } else {
+        // If frames per packet is not known, fallback to something large enough
+        cmp::max(max_packet_size, UPPER_BUFFER_SIZE_HINT)
+    }
+}
+
+fn create_buffers(
+    output_queue: sys::AudioQueueRef,
+    buffer_size: u32,
+    packet_description_count: u32,
+) -> Result<Vec<sys::AudioQueueBufferRef>, PlaybackError> {
+    unsafe {
+        vec![MaybeUninit::uninit(); BUFFER_COUNT]
+            .into_iter()
+            //TODO: Can we allocate buffers _without_ packet descriptions if we dont need them?
+            .map(|mut buffer_ref| {
+                let status = sys::audio_queue_allocate_buffer_with_packet_descriptions(
+                    output_queue,
+                    buffer_size,
+                    packet_description_count,
+                    buffer_ref.as_mut_ptr(),
+                );
+                if status == 0 {
+                    Ok(buffer_ref.assume_init())
+                } else {
+                    Err(PlaybackError::FailedToAllocateBuffer(status))
+                }
+            })
+            .collect()
+    }
+}
+
+// TODO: How do we make sure this code isnt leaky over time?
 // TODO: Use kAudioFilePropertyFormatList to deal with multi format files?
 // TODO: Query the files channel layout to handle multi channel files?
 
@@ -282,49 +337,35 @@ pub fn play(path: String) -> Result<(), PlaybackError> {
     let format = audio_file_read_basic_description(playback_file)?;
     println!("\nAudio format:\n{format:#?}");
 
+    // Use
+    //  - the theoretical max size of a packet of this format
+    //  - some heuristics
+    //  - a desired buffer duration (aproximate)
+    // to determine
+    // - how big each buffer needs to be
+    // - how many packet to read each time we fill a buffer
+
+    let max_packet_size = audio_file_read_packet_size_upper_bound(playback_file)?;
+    let buffer_size = calculate_buffer_size(&format, max_packet_size);
+    let packets_per_buffer: u32 = buffer_size / max_packet_size;
+
+    println!("Buffer size: {buffer_size} bytes");
+    println!("Max packet size: {max_packet_size} bytes");
+    println!("Packets per buffer: {packets_per_buffer}");
+
+    let is_vbr = format.bytes_per_packet == 0 || format.frames_per_packet == 0;
+    let packet_description_count = if is_vbr { packets_per_buffer } else { 0 };
+
+    //TODO: Consider building a func instead of sharing so much via user_data
+    let mut state = PlaybackState {
+        playing_file: playback_file,
+        current_packet: 0,
+        packets_per_buffer: packets_per_buffer,
+        is_vbr: is_vbr,
+        finished: false,
+    };
+
     unsafe {
-        // Use
-        //  - the theoretical max size of a packet of this format
-        //  - some heuristics
-        //  - a desired buffer duration (aproximate)
-        // to determine
-        // - how big each buffer needs to be
-        // - how many packet to read each time we fill a buffer
-
-        //TODO: Write some tests for this calculation
-        let max_packet_size = audio_file_read_packet_size_upper_bound(playback_file)?;
-
-        let buffer_size: u32 = if format.frames_per_packet != 0 {
-            println!("Known frames per packet");
-            // If frames per packet are known, tailor the buffer size.
-            let frames = format.sample_rate * BUFFER_SECONDS_HINT;
-            let packets = (frames / (format.frames_per_packet as f64)).ceil() as u32;
-            let size = packets * max_packet_size;
-            let size = cmp::max(size, LOWER_BUFFER_SIZE_HINT);
-            let size = cmp::min(size, UPPER_BUFFER_SIZE_HINT);
-            size
-        } else {
-            println!("Unknown frames per packet");
-            // If frames per packet is not known, fallback to something large enough
-            cmp::max(max_packet_size, UPPER_BUFFER_SIZE_HINT)
-        };
-
-        println!("buffer_size: {buffer_size} bytes");
-        println!("max_packet_size: {max_packet_size} bytes");
-        let packets_per_buffer: u32 = buffer_size / max_packet_size;
-        println!("packets_per_buffer: {packets_per_buffer}");
-
-        let is_vbr = format.bytes_per_packet == 0 || format.frames_per_packet == 0;
-        let packet_description_count = if is_vbr { packets_per_buffer } else { 0 };
-
-        let mut state = PlaybackState {
-            playing_file: playback_file,
-            current_packet: 0,
-            packets_per_buffer: packets_per_buffer,
-            is_vbr: is_vbr,
-            finished: false,
-        };
-
         let state_ptr = &mut state as *mut _ as *mut c_void;
 
         let output_queue = output_queue_create(&format, state_ptr)?;
@@ -334,26 +375,9 @@ pub fn play(path: String) -> Result<(), PlaybackError> {
             output_queue_set_magic_cookie(output_queue, cookie)?;
         }
 
-        //TODO: Double check what these buffer references are needed for
-        let buffers = vec![MaybeUninit::uninit(); BUFFER_COUNT]
-            .into_iter()
-            .map(|mut buffer_ref| {
-                let status = sys::audio_queue_allocate_buffer_with_packet_descriptions(
-                    output_queue,
-                    buffer_size,
-                    packet_description_count,
-                    buffer_ref.as_mut_ptr(),
-                );
-                if status == 0 {
-                    Ok(buffer_ref.assume_init())
-                } else {
-                    Err(PlaybackError::FailedToAllocateBuffer(status))
-                }
-            })
-            .collect::<Result<Vec<sys::AudioQueueBufferRef>, PlaybackError>>()?;
+        let buffers = create_buffers(output_queue, buffer_size, packet_description_count)?;
 
-        //TODO: Check the below behaves sensibly for small files
-
+        //TODO: Check that preloading behaves sensibly for small files
         // Pre load buffers with audio
         for buffer in buffers {
             // For small files the entire audio could be less than the buffers
@@ -364,11 +388,7 @@ pub fn play(path: String) -> Result<(), PlaybackError> {
             handle_buffer(state_ptr, output_queue, buffer);
         }
 
-        let status = sys::audio_queue_start(output_queue, ptr::null());
-
-        if status != 0 {
-            return Err(PlaybackError::FailedToStartAudioQueue(status));
-        }
+        output_queue_start_immediately(output_queue)?;
 
         //FIXME: Create real controls
         let mut input = String::new();
@@ -447,7 +467,7 @@ unsafe fn read_audio_file_property<T>(
     }
 
     // audio_file_get_property outputs the number of bytes written to data_size
-    // Check to see if this is correct for our given type
+    // Check to see if this is correct for the given type
     assert!(data_size == mem::size_of::<T>() as u32);
 
     return Ok(data);
@@ -461,8 +481,6 @@ extern "C" fn handle_buffer(
     //TODO: Can we extract the middle out of this to make initial pre-buffering
     // easier?
     unsafe {
-        // TODO: exit early if finished is true
-
         // TODO: Should always we ask for more packets than buffer can hold to ensure
         // the buffer gets fully used?
         //
@@ -477,6 +495,12 @@ extern "C" fn handle_buffer(
         //
         // Is there somehow we could test this by detecting underutilized buffers?
         let state = user_data as *mut PlaybackState;
+
+        if (*state).finished {
+            // This should take the buffer out of rotation
+            return;
+        }
+
         let mut num_bytes = (*buffer).audio_data_bytes_capacity;
         let mut num_packets = (*state).packets_per_buffer;
 
@@ -511,7 +535,7 @@ extern "C" fn handle_buffer(
             //TODO: Do something with enqueue status
             (*state).current_packet += num_packets as i64;
         } else {
-            // TODO: Stop queue here?
+            // TODO: Stop queue here? Or on the main thread?
             (*state).finished = true;
         }
     }
