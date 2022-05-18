@@ -155,7 +155,6 @@ fn audio_file_read_properties(
         let values: Vec<String> = values.into_iter().map(|v| cfstring_to_string(v)).collect();
         let properties = keys.into_iter().zip(values);
 
-        //TODO: Do we also have to release the contents of the dictionary?
         sys::cf_release(info_dict as *const c_void);
 
         Ok(properties)
@@ -230,7 +229,7 @@ fn audio_file_close(file_id: sys::AudioFileID) -> Result<(), PlaybackError> {
 
 fn output_queue_create(
     format: &sys::AudioStreamBasicDescription,
-    //TODO: Consider using a propper type
+    //TODO: Consider using a propper type, or baking user_data into callback
     user_data: *mut c_void,
     callback: sys::AudioQueueOutputCallback,
 ) -> Result<sys::AudioQueueRef, PlaybackError> {
@@ -324,8 +323,7 @@ fn calculate_buffer_size(format: &sys::AudioStreamBasicDescription, max_packet_s
         let packets = (frames / (format.frames_per_packet as f64)).ceil() as u32;
         let size = packets * max_packet_size;
         let size = cmp::max(size, LOWER_BUFFER_SIZE_HINT);
-        let size = cmp::min(size, UPPER_BUFFER_SIZE_HINT);
-        size
+        cmp::min(size, UPPER_BUFFER_SIZE_HINT)
     } else {
         // If frames per packet is not known, fallback to something large enough
         cmp::max(max_packet_size, UPPER_BUFFER_SIZE_HINT)
@@ -504,7 +502,7 @@ unsafe fn read_audio_file_property<T>(
     // Check to see if this is correct for the given type
     assert!(data_size == mem::size_of::<T>() as u32);
 
-    return Ok(data);
+    Ok(data)
 }
 
 extern "C" fn handle_buffer(
@@ -531,9 +529,10 @@ extern "C" fn handle_buffer(
         // packet_descriptions.
         //
         // Is there somehow we could test this by detecting underutilized buffers?
-        let state = user_data as *mut PlaybackState;
+        let state = &mut *(user_data as *mut PlaybackState);
+        let buffer = &mut *buffer;
 
-        if (*state).finished {
+        if state.finished {
             println!("returning from buffer callback early");
             // Returning withouth re-enqueuing.
             // This should take the buffer out of rotation.
@@ -541,29 +540,27 @@ extern "C" fn handle_buffer(
         }
 
         let mut num_bytes = (*buffer).audio_data_bytes_capacity;
-        let mut num_packets = (*state).packets_per_buffer;
-
-        //TODO: Can we de-reference up front?
+        let mut num_packets = state.packets_per_buffer;
 
         let status = sys::audio_file_read_packet_data(
-            (*state).playing_file,
+            (state).playing_file,
             false, // dont use caching
             &mut num_bytes,
-            if (*state).is_vbr {
-                (*buffer).packet_descriptions
+            if state.is_vbr {
+                buffer.packet_descriptions
             } else {
                 ptr::null_mut()
             },
-            (*state).current_packet,
+            state.current_packet,
             &mut num_packets,
-            (*buffer).audio_data,
+            buffer.audio_data,
         );
 
         //TODO: Do something with read status
 
         if num_packets > 0 {
-            (*buffer).audio_data_byte_size = num_bytes;
-            (*buffer).packet_description_count = if (*state).is_vbr { num_packets } else { 0 };
+            buffer.audio_data_byte_size = num_bytes;
+            buffer.packet_description_count = if state.is_vbr { num_packets } else { 0 };
             let status = sys::audio_queue_enqueue_buffer(
                 audio_queue,
                 buffer,
@@ -572,10 +569,10 @@ extern "C" fn handle_buffer(
                 ptr::null(),
             );
             //TODO: Do something with enqueue status
-            (*state).current_packet += num_packets as i64;
+            state.current_packet += num_packets as i64;
         } else {
             // TODO: Stop queue here? Or on the main thread?
-            (*state).finished = true;
+            state.finished = true;
         }
     }
 }
