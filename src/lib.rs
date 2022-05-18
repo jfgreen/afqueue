@@ -19,17 +19,21 @@ const UPPER_BUFFER_SIZE_HINT: u32 = 0x50000;
 const BUFFER_SECONDS_HINT: f64 = 0.5;
 const BUFFER_COUNT: usize = 3;
 
+pub type SystemErrorCode = i32;
+
 pub enum PlaybackError {
     PathContainsInteriorNull(NulError),
     PathIsEmpty,
-    FailedToOpenAudioFile(sys::OSStatus),
-    FailedToCloseAudioFile(sys::OSStatus),
-    FailedToReadFileProperty(sys::OSStatus),
-    FailedToReadFilePropertyInfo(sys::OSStatus),
-    FailedToCreateAudioQueue(sys::OSStatus),
-    FailedToSetAudioQueueProperty(sys::OSStatus),
-    FailedToAllocateBuffer(sys::OSStatus),
-    FailedToStartAudioQueue(sys::OSStatus),
+    FailedToOpenAudioFile(SystemErrorCode),
+    FailedToCloseAudioFile(SystemErrorCode),
+    FailedToReadFileProperty(SystemErrorCode),
+    FailedToReadFilePropertyInfo(SystemErrorCode),
+    FailedToCreateAudioQueue(SystemErrorCode),
+    FailedToSetAudioQueueProperty(SystemErrorCode),
+    FailedToAllocateBuffer(SystemErrorCode),
+    FailedToStartAudioQueue(SystemErrorCode),
+    FailedToStopAudioQueue(SystemErrorCode),
+    FailedToDisposeAudioQueue(SystemErrorCode),
 }
 
 impl From<NulError> for PlaybackError {
@@ -47,33 +51,35 @@ impl fmt::Display for PlaybackError {
             PlaybackError::PathIsEmpty => {
                 write!(f, "Attempted to interpret an empty string as a path")
             }
-            PlaybackError::FailedToOpenAudioFile(status) => {
-                write!(f, "Failed to open audio file, OSStatus: {}", status)
+            PlaybackError::FailedToOpenAudioFile(code) => {
+                write!(f, "Failed to open audio file, error: {}", code)
             }
-            PlaybackError::FailedToCloseAudioFile(status) => {
-                write!(f, "Failed to close audio file, OSStatus: {}", status)
+            PlaybackError::FailedToCloseAudioFile(code) => {
+                write!(f, "Failed to close audio file, error: {}", code)
             }
-            PlaybackError::FailedToReadFileProperty(status) => {
-                write!(f, "Failed to read file property, OSStatus: {}", status)
+            PlaybackError::FailedToReadFileProperty(code) => {
+                write!(f, "Failed to read file property, error: {}", code)
             }
-            PlaybackError::FailedToReadFilePropertyInfo(status) => {
-                write!(f, "Failed to read file property, OSStatus: {}", status)
+            PlaybackError::FailedToReadFilePropertyInfo(code) => {
+                write!(f, "Failed to read file property, error: {}", code)
             }
-            PlaybackError::FailedToCreateAudioQueue(status) => {
-                write!(f, "Failed to create audio queue, OSStatus: {}", status)
+            PlaybackError::FailedToCreateAudioQueue(code) => {
+                write!(f, "Failed to create audio queue, error: {}", code)
             }
-            PlaybackError::FailedToSetAudioQueueProperty(status) => {
-                write!(
-                    f,
-                    "Failed to set audio queue property, OSStatus: {}",
-                    status
-                )
+            PlaybackError::FailedToSetAudioQueueProperty(code) => {
+                write!(f, "Failed to set audio queue property, error: {}", code)
             }
-            PlaybackError::FailedToAllocateBuffer(status) => {
-                write!(f, "Failed to allocate buffer, OSStatus: {}", status)
+            PlaybackError::FailedToAllocateBuffer(code) => {
+                write!(f, "Failed to allocate buffer, error: {}", code)
             }
-            PlaybackError::FailedToStartAudioQueue(status) => {
-                write!(f, "Failed to start audio queue, OSStatus: {}", status)
+            PlaybackError::FailedToStartAudioQueue(code) => {
+                write!(f, "Failed to start audio queue, error: {}", code)
+            }
+            PlaybackError::FailedToStopAudioQueue(code) => {
+                write!(f, "Failed to stop audio queue, error: {}", code)
+            }
+            PlaybackError::FailedToDisposeAudioQueue(code) => {
+                write!(f, "Failed to dispose audio queue, error: {}", code)
             }
         }
     }
@@ -222,17 +228,17 @@ fn audio_file_close(file_id: sys::AudioFileID) -> Result<(), PlaybackError> {
     Ok(())
 }
 
-//TODO: Pass in callback
 fn output_queue_create(
     format: &sys::AudioStreamBasicDescription,
     //TODO: Consider using a propper type
     user_data: *mut c_void,
+    callback: sys::AudioQueueOutputCallback,
 ) -> Result<sys::AudioQueueRef, PlaybackError> {
     unsafe {
         let mut output_queue = MaybeUninit::uninit();
         let status = sys::audio_queue_new_output(
             format,
-            handle_buffer,
+            callback,
             user_data,
             0 as *const _, // Run loop
             0 as *const _, // Run loop mode
@@ -268,14 +274,44 @@ fn output_queue_set_magic_cookie(
     }
 }
 
-fn output_queue_start_immediately(output_queue: sys::AudioQueueRef) -> Result<(), PlaybackError> {
+fn output_queue_start(output_queue: sys::AudioQueueRef) -> Result<(), PlaybackError> {
     unsafe {
         let status = sys::audio_queue_start(output_queue, ptr::null());
 
         if status == 0 {
             Ok(())
         } else {
-            Err(PlaybackError::FailedToStartAudioQueue(status));
+            Err(PlaybackError::FailedToStartAudioQueue(status))
+        }
+    }
+}
+
+fn output_queue_stop(
+    output_queue: sys::AudioQueueRef,
+    immediate: bool,
+) -> Result<(), PlaybackError> {
+    unsafe {
+        let status = sys::audio_queue_stop(output_queue, immediate);
+
+        if status == 0 {
+            Ok(())
+        } else {
+            Err(PlaybackError::FailedToStopAudioQueue(status))
+        }
+    }
+}
+
+fn output_queue_dispose(
+    output_queue: sys::AudioQueueRef,
+    immediate: bool,
+) -> Result<(), PlaybackError> {
+    unsafe {
+        let status = sys::audio_queue_dispose(output_queue, immediate);
+
+        if status == 0 {
+            Ok(())
+        } else {
+            Err(PlaybackError::FailedToDisposeAudioQueue(status))
         }
     }
 }
@@ -365,37 +401,35 @@ pub fn play(path: String) -> Result<(), PlaybackError> {
         finished: false,
     };
 
-    unsafe {
-        let state_ptr = &mut state as *mut _ as *mut c_void;
+    let state_ptr = &mut state as *mut _ as *mut c_void;
 
-        let output_queue = output_queue_create(&format, state_ptr)?;
+    let output_queue = output_queue_create(&format, state_ptr, handle_buffer)?;
 
-        if let Some(cookie) = audio_file_read_magic_cookie(playback_file)? {
-            println!("Magic cookie is {} bytes", cookie.len());
-            output_queue_set_magic_cookie(output_queue, cookie)?;
-        }
-
-        let buffers = create_buffers(output_queue, buffer_size, packet_description_count)?;
-
-        //TODO: Check that preloading behaves sensibly for small files
-        // Pre load buffers with audio
-        for buffer in buffers {
-            // For small files the entire audio could be less than the buffers
-            if state.finished {
-                break;
-                //TODO: Is there a better way than a break in a for loop
-            }
-            handle_buffer(state_ptr, output_queue, buffer);
-        }
-
-        output_queue_start_immediately(output_queue)?;
-
-        //FIXME: Create real controls
-        let mut input = String::new();
-        std::io::stdin().read_line(&mut input).unwrap();
-
-        //TODO: Stop and dispose of queue
+    if let Some(cookie) = audio_file_read_magic_cookie(playback_file)? {
+        println!("Magic cookie is {} bytes", cookie.len());
+        output_queue_set_magic_cookie(output_queue, cookie)?;
     }
+
+    let buffers = create_buffers(output_queue, buffer_size, packet_description_count)?;
+
+    // Pre load buffers with audio
+    // For small files, this might result only some of the buffers being enqueued.
+    // TODO: Make small file logic (which relies on early return) somewhat clearer
+    for buffer in buffers {
+        // For small files the entire audio could be less than the buffers
+        handle_buffer(state_ptr, output_queue, buffer);
+    }
+
+    println!("Main thread id: {:?}", std::thread::current().id());
+
+    output_queue_start(output_queue)?;
+
+    //FIXME: Create real controls
+    let mut input = String::new();
+    std::io::stdin().read_line(&mut input).unwrap();
+
+    output_queue_stop(output_queue, true)?;
+    output_queue_dispose(output_queue, true)?;
 
     audio_file_close(playback_file)?;
     Ok(())
@@ -480,6 +514,9 @@ extern "C" fn handle_buffer(
 ) {
     //TODO: Can we extract the middle out of this to make initial pre-buffering
     // easier?
+
+    println!("Callback thread id: {:?}", std::thread::current().id());
+
     unsafe {
         // TODO: Should always we ask for more packets than buffer can hold to ensure
         // the buffer gets fully used?
@@ -497,7 +534,9 @@ extern "C" fn handle_buffer(
         let state = user_data as *mut PlaybackState;
 
         if (*state).finished {
-            // This should take the buffer out of rotation
+            println!("returning from buffer callback early");
+            // Returning withouth re-enqueuing.
+            // This should take the buffer out of rotation.
             return;
         }
 
