@@ -35,6 +35,7 @@ pub enum PlaybackError {
     FailedToStopAudioQueue(SystemErrorCode),
     FailedToDisposeAudioQueue(SystemErrorCode),
     FailedToReadFromAudioFile(SystemErrorCode),
+    FailedToEnqueueBuffer(SystemErrorCode),
 }
 
 impl From<NulError> for PlaybackError {
@@ -85,14 +86,11 @@ impl fmt::Display for PlaybackError {
             PlaybackError::FailedToReadFromAudioFile(code) => {
                 write!(f, "Failed to read from audio file, error: {}", code)
             }
+            PlaybackError::FailedToEnqueueBuffer(code) => {
+                write!(f, "Failed to enqueue buffer, error: {}", code)
+            }
         }
     }
-}
-
-struct PlaybackState {
-    reader: AudioFileReader,
-    current_packet: i64,
-    finished: bool,
 }
 
 // TODO: How do we make sure this code isnt leaky over time?
@@ -129,24 +127,18 @@ pub fn play(path: String) -> Result<(), PlaybackError> {
     let is_vbr = format.bytes_per_packet == 0 || format.frames_per_packet == 0;
     let packet_description_count = if is_vbr { packets_per_buffer } else { 0 };
 
-    //TODO: Would AudioFileReader::new(playback_file) make sense?
-    let reader = AudioFileReader {
+    //TODO: Would PlaybackHandler::new(playback_file) make sense?
+    let mut handler = PlaybackHandler {
         playback_file,
         packets_per_buffer,
         is_vbr,
-    };
-
-    // TODO: Consider - do we want to encapsulate this further?
-    // i.e combine with AudioFileReader
-    let mut state = PlaybackState {
-        reader,
         current_packet: 0,
         finished: false,
     };
 
-    let state_ptr = &mut state as *mut _ as *mut c_void;
+    let handler_ptr = &mut handler as *mut _ as *mut c_void;
 
-    let output_queue = output_queue_create(&format, state_ptr, handle_buffer)?;
+    let output_queue = output_queue_create(&format, handler_ptr, handle_buffer)?;
 
     if let Some(cookie) = audio_file_read_magic_cookie(playback_file)? {
         println!("Magic cookie is {} bytes", cookie.len());
@@ -157,10 +149,12 @@ pub fn play(path: String) -> Result<(), PlaybackError> {
 
     // Pre load buffers with audio
     // For small files, this might result only some of the buffers being enqueued.
-    // TODO: Make small file logic (which relies on early return) somewhat clearer
     for buffer in buffers {
-        // For small files the entire audio could be less than the buffers
-        handle_buffer(state_ptr, output_queue, buffer);
+        let finished = handler.enqueue_next_buffer(output_queue, buffer)?;
+        if finished {
+            println!("No more data to read, exiting pre-buffering early");
+            break;
+        }
     }
 
     println!("Main thread id: {:?}", std::thread::current().id());
@@ -176,6 +170,96 @@ pub fn play(path: String) -> Result<(), PlaybackError> {
 
     audio_file_close(playback_file)?;
     Ok(())
+}
+
+struct PlaybackHandler {
+    playback_file: sys::AudioFileID,
+    packets_per_buffer: u32,
+    is_vbr: bool,
+    current_packet: i64,
+    finished: bool,
+}
+
+impl PlaybackHandler {
+    // This handler assumes `buffer` adheres to several invarients:
+    // - Are at least `packets_per_buffer` big
+    // - Were allocated with packet descriptions
+    // - Belong to `audio_queue`
+    fn enqueue_next_buffer(
+        &mut self,
+        audio_queue: sys::AudioQueueRef,
+        buffer: *mut sys::AudioQueueBuffer,
+    ) -> Result<bool, PlaybackError> {
+        // TODO: Should always we ask for more packets than buffer can hold to ensure
+        // the buffer gets fully used?
+        //
+        // We could calculate the max packets per buffer instead of minimum? I.e
+        // optimistic instead of pessamistic.
+        //
+        // This would possibly take advantage of the properties AudioFileReadPacketData
+        // has over AudioFileReadPackets?
+        //
+        // We would still need an upper limit (and overallocate) the
+        // packet_descriptions.
+        //
+        // Is there somehow we could test this by detecting underutilized buffers?
+
+        // The queue could continue to callback with remaining buffers.
+        // Avoid unnecessary attempts to read the file again.
+        if self.finished {
+            println!("ignoring request to fill buffer");
+            return Ok(true);
+        }
+
+        unsafe {
+            let buffer = &mut *buffer;
+            let mut num_bytes = buffer.audio_data_bytes_capacity;
+            let mut num_packets = self.packets_per_buffer;
+            let status = sys::audio_file_read_packet_data(
+                self.playback_file,
+                false, // dont use caching
+                &mut num_bytes,
+                if self.is_vbr {
+                    buffer.packet_descriptions
+                } else {
+                    ptr::null_mut()
+                },
+                self.current_packet,
+                &mut num_packets,
+                buffer.audio_data,
+            );
+
+            if status != 0 {
+                return Err(PlaybackError::FailedToReadFromAudioFile(status));
+            }
+
+            // num_packets is written back to
+            let packets_read = num_packets;
+
+            if packets_read == 0 {
+                self.finished = true;
+                return Ok(true);
+            }
+
+            buffer.audio_data_byte_size = num_bytes;
+            buffer.packet_description_count = if self.is_vbr { num_packets } else { 0 };
+
+            let status = sys::audio_queue_enqueue_buffer(
+                audio_queue,
+                buffer,
+                // Packet descriptions are supplied via buffer itself
+                0,
+                ptr::null(),
+            );
+
+            if status != 0 {
+                return Err(PlaybackError::FailedToEnqueueBuffer(status));
+            }
+
+            self.current_packet += packets_read as i64;
+            Ok(false)
+        }
+    }
 }
 
 fn audio_file_open(path: String) -> Result<sys::AudioFileID, PlaybackError> {
@@ -216,6 +300,16 @@ fn audio_file_open(path: String) -> Result<sys::AudioFileID, PlaybackError> {
     }
 }
 
+fn audio_file_close(file_id: sys::AudioFileID) -> Result<(), PlaybackError> {
+    unsafe {
+        let status = sys::audio_file_close(file_id);
+        if status != 0 {
+            return Err(PlaybackError::FailedToCloseAudioFile(status));
+        }
+    }
+    Ok(())
+}
+
 fn audio_file_read_properties(
     file_id: sys::AudioFileID,
 ) -> Result<impl Iterator<Item = (String, String)>, PlaybackError> {
@@ -236,8 +330,9 @@ fn audio_file_read_properties(
 
         // Copy into Rust strings
         // Note: We use collect to process each cfstring before releasing the dict
-        let keys: Vec<String> = keys.into_iter().map(|k| cfstring_to_string(k)).collect();
-        let values: Vec<String> = values.into_iter().map(|v| cfstring_to_string(v)).collect();
+        let converter = |s| cfstring_to_string(s);
+        let keys: Vec<String> = keys.into_iter().map(converter).collect();
+        let values: Vec<String> = values.into_iter().map(converter).collect();
         let properties = keys.into_iter().zip(values);
 
         sys::cf_release(info_dict as *const c_void);
@@ -302,62 +397,8 @@ fn audio_file_read_magic_cookie(
     }
 }
 
-struct AudioFileReader {
-    playback_file: sys::AudioFileID,
-    packets_per_buffer: u32,
-    is_vbr: bool,
-}
-
-impl AudioFileReader {
-    fn fill_buffer(
-        &mut self,
-        buffer: &mut sys::AudioQueueBuffer,
-        from_packet: i64,
-    ) -> Result<u32, PlaybackError> {
-        let mut num_bytes = buffer.audio_data_bytes_capacity;
-        let mut num_packets = self.packets_per_buffer;
-
-        unsafe {
-            let status = sys::audio_file_read_packet_data(
-                self.playback_file,
-                false, // dont use caching
-                &mut num_bytes,
-                if self.is_vbr {
-                    buffer.packet_descriptions
-                } else {
-                    ptr::null_mut()
-                },
-                from_packet,
-                &mut num_packets,
-                buffer.audio_data,
-            );
-
-            if status != 0 {
-                return Err(PlaybackError::FailedToReadFromAudioFile(status));
-            }
-
-            if num_packets > 0 {
-                buffer.audio_data_byte_size = num_bytes;
-                buffer.packet_description_count = if self.is_vbr { num_packets } else { 0 };
-            }
-            Ok(num_packets)
-        }
-    }
-}
-
-fn audio_file_close(file_id: sys::AudioFileID) -> Result<(), PlaybackError> {
-    unsafe {
-        let status = sys::audio_file_close(file_id);
-        if status != 0 {
-            return Err(PlaybackError::FailedToCloseAudioFile(status));
-        }
-    }
-    Ok(())
-}
-
 fn output_queue_create(
     format: &sys::AudioStreamBasicDescription,
-    //TODO: Consider using a propper type, or baking user_data into callback
     user_data: *mut c_void,
     callback: sys::AudioQueueOutputCallback,
 ) -> Result<sys::AudioQueueRef, PlaybackError> {
@@ -561,53 +602,21 @@ extern "C" fn handle_buffer(
     audio_queue: sys::AudioQueueRef,
     buffer: sys::AudioQueueBufferRef,
 ) {
-    //TODO: Can we extract the middle out of this to make initial pre-buffering
-    // easier?
-
     println!("Callback thread id: {:?}", std::thread::current().id());
 
     unsafe {
-        // TODO: Should always we ask for more packets than buffer can hold to ensure
-        // the buffer gets fully used?
-        //
-        // We could calculate the max packets per buffer instead of minimum? I.e
-        // optimistic instead of pessamistic.
-        //
-        // This would possibly take advantage of the properties AudioFileReadPacketData
-        // has over AudioFileReadPackets?
-        //
-        // We would still need an upper limit (and overallocate) the
-        // packet_descriptions.
-        //
-        // Is there somehow we could test this by detecting underutilized buffers?
-        let state = &mut *(user_data as *mut PlaybackState);
-        let buffer = &mut *buffer;
-
-        if state.finished {
-            println!("returning from buffer callback early");
-            // Returning withouth re-enqueuing.
-            // This should take the buffer out of rotation.
-            return;
-        }
-
-        if let Ok(packets_read) = state.reader.fill_buffer(buffer, state.current_packet) {
-            if packets_read > 0 {
-                let status = sys::audio_queue_enqueue_buffer(
-                    audio_queue,
-                    buffer,
-                    // Packet descriptions are supplied via buffer itself
-                    0,
-                    ptr::null(),
-                );
-                //TODO: Do something with enqueue status
-                state.current_packet += packets_read as i64;
-            } else {
-                // TODO: Stop queue here? Or on the main thread?
-                // Surely the other buffers callbacks will shortcircuit after this point?
-                state.finished = true;
-            }
-        } else {
-            //TODO: Handle error properly
+        let handler = &mut *(user_data as *mut PlaybackHandler);
+        //TODO: Handle spurious errors about enqueing during reset
+        // Options:
+        // Treat it as the sign to stop early (i.e a rude form of communication)
+        // Have the other thread warn us not to try, but this would be a race condition
+        // (i.e if it stopped the queue after checking the flag and before enqueing)
+        // The other is to actually handle the stopping on this thread...
+        // (i.e the other thread asks us to stop)
+        // ... but what if we got asked to stop half way through reading a file? Hmm.
+        if let Err(error) = handler.enqueue_next_buffer(audio_queue, buffer) {
+            //TODO: Handle error properly, send back to main thread somehow?
+            println!("oh no: {error}");
         }
     }
 }
