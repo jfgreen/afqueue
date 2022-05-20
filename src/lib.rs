@@ -12,7 +12,9 @@ use std::ptr;
 
 mod system;
 
-use system as sys;
+use system::{
+    self as sys, AudioFileID, AudioQueueBufferRef as BufferRef, AudioQueueRef as QueueRef,
+};
 
 const LOWER_BUFFER_SIZE_HINT: u32 = 0x4000;
 const UPPER_BUFFER_SIZE_HINT: u32 = 0x50000;
@@ -20,6 +22,10 @@ const BUFFER_SECONDS_HINT: f64 = 0.5;
 const BUFFER_COUNT: usize = 3;
 
 pub type SystemErrorCode = i32;
+
+type PlaybackResult<T> = Result<T, PlaybackError>;
+type PacketPosition = i64;
+type PacketCount = u32;
 
 pub enum PlaybackError {
     PathContainsInteriorNull(NulError),
@@ -97,7 +103,7 @@ impl fmt::Display for PlaybackError {
 // TODO: Use kAudioFilePropertyFormatList to deal with multi format files?
 // TODO: Query the files channel layout to handle multi channel files?
 
-pub fn play(path: String) -> Result<(), PlaybackError> {
+pub fn play(path: String) -> PlaybackResult<()> {
     let playback_file = audio_file_open(path)?;
 
     println!("Properties:");
@@ -105,56 +111,26 @@ pub fn play(path: String) -> Result<(), PlaybackError> {
         println!("{k}: {v}");
     }
 
+    let reader = AudioFileReader::new(playback_file)?;
+    //TODO: Avoid redunantly reading format
     let format = audio_file_read_basic_description(playback_file)?;
-    println!("\nAudio format:\n{format:#?}");
-
-    // Use
-    //  - the theoretical max size of a packet of this format
-    //  - some heuristics
-    //  - a desired buffer duration (aproximate)
-    // to determine
-    // - how big each buffer needs to be
-    // - how many packet to read each time we fill a buffer
-
-    let max_packet_size = audio_file_read_packet_size_upper_bound(playback_file)?;
-    let buffer_size = calculate_buffer_size(&format, max_packet_size);
-    let packets_per_buffer: u32 = buffer_size / max_packet_size;
-
-    println!("Buffer size: {buffer_size} bytes");
-    println!("Max packet size: {max_packet_size} bytes");
-    println!("Packets per buffer: {packets_per_buffer}");
-
-    let is_vbr = format.bytes_per_packet == 0 || format.frames_per_packet == 0;
-    let packet_description_count = if is_vbr { packets_per_buffer } else { 0 };
-
-    //TODO: Would PlaybackHandler::new(playback_file) make sense?
-    let mut handler = PlaybackHandler {
-        playback_file,
-        packets_per_buffer,
-        is_vbr,
-        current_packet: 0,
-        finished: false,
-    };
-
+    //TODO: Hmmm, could we do better here...?
+    let buffer_config = reader.buffer_config;
+    let mut handler = PlaybackHandler::new(reader);
     let handler_ptr = &mut handler as *mut _ as *mut c_void;
-
-    let output_queue = output_queue_create(&format, handler_ptr, handle_buffer)?;
+    let output_queue = output_queue_create(&format, handler_ptr)?;
 
     if let Some(cookie) = audio_file_read_magic_cookie(playback_file)? {
         println!("Magic cookie is {} bytes", cookie.len());
         output_queue_set_magic_cookie(output_queue, cookie)?;
     }
 
-    let buffers = create_buffers(output_queue, buffer_size, packet_description_count)?;
+    let buffers = create_buffers(output_queue, buffer_config)?;
 
     // Pre load buffers with audio
     // For small files, this might result only some of the buffers being enqueued.
     for buffer in buffers {
-        let finished = handler.enqueue_next_buffer(output_queue, buffer)?;
-        if finished {
-            println!("No more data to read, exiting pre-buffering early");
-            break;
-        }
+        handler.enqueue_next_buffer(output_queue, buffer)?;
     }
 
     println!("Main thread id: {:?}", std::thread::current().id());
@@ -173,23 +149,28 @@ pub fn play(path: String) -> Result<(), PlaybackError> {
 }
 
 struct PlaybackHandler {
-    playback_file: sys::AudioFileID,
-    packets_per_buffer: u32,
-    is_vbr: bool,
-    current_packet: i64,
+    reader: AudioFileReader,
+    current_packet: PacketPosition,
     finished: bool,
 }
 
 impl PlaybackHandler {
+    fn new(reader: AudioFileReader) -> Self {
+        Self {
+            reader,
+            current_packet: 0,
+            finished: false,
+        }
+    }
     // This handler assumes `buffer` adheres to several invarients:
     // - Are at least `packets_per_buffer` big
     // - Were allocated with packet descriptions
     // - Belong to `audio_queue`
     fn enqueue_next_buffer(
         &mut self,
-        audio_queue: sys::AudioQueueRef,
-        buffer: *mut sys::AudioQueueBuffer,
-    ) -> Result<bool, PlaybackError> {
+        audio_queue: QueueRef,
+        buffer: BufferRef,
+    ) -> PlaybackResult<bool> {
         // TODO: Should always we ask for more packets than buffer can hold to ensure
         // the buffer gets fully used?
         //
@@ -212,37 +193,12 @@ impl PlaybackHandler {
         }
 
         unsafe {
-            let buffer = &mut *buffer;
-            let mut num_bytes = buffer.audio_data_bytes_capacity;
-            let mut num_packets = self.packets_per_buffer;
-            let status = sys::audio_file_read_packet_data(
-                self.playback_file,
-                false, // dont use caching
-                &mut num_bytes,
-                if self.is_vbr {
-                    buffer.packet_descriptions
-                } else {
-                    ptr::null_mut()
-                },
-                self.current_packet,
-                &mut num_packets,
-                buffer.audio_data,
-            );
-
-            if status != 0 {
-                return Err(PlaybackError::FailedToReadFromAudioFile(status));
-            }
-
-            // num_packets is written back to
-            let packets_read = num_packets;
+            let packets_read = self.reader.fill_buffer(buffer, self.current_packet)?;
 
             if packets_read == 0 {
                 self.finished = true;
                 return Ok(true);
             }
-
-            buffer.audio_data_byte_size = num_bytes;
-            buffer.packet_description_count = if self.is_vbr { num_packets } else { 0 };
 
             let status = sys::audio_queue_enqueue_buffer(
                 audio_queue,
@@ -262,7 +218,109 @@ impl PlaybackHandler {
     }
 }
 
-fn audio_file_open(path: String) -> Result<sys::AudioFileID, PlaybackError> {
+#[derive(Copy, Clone)]
+struct BufferConfig {
+    packets_per_buffer: PacketCount,
+    buffer_size: u32,
+    is_vbr: bool,
+}
+
+impl BufferConfig {
+    fn packet_descriptions(&self) -> PacketCount {
+        if self.is_vbr {
+            self.packets_per_buffer
+        } else {
+            0
+        }
+    }
+}
+
+//TODO: Is this maybe more like a builder thing, that returns a reader, a queue
+// and other bits? How about "PlaybackContext"?
+struct AudioFileReader {
+    playback_file: AudioFileID,
+    buffer_config: BufferConfig,
+    format: sys::AudioStreamBasicDescription,
+}
+
+//TODO: Can we introduce a strategy pattern internally to optimise vbr?
+impl AudioFileReader {
+    fn new(playback_file: AudioFileID) -> PlaybackResult<Self> {
+        // Use
+        //  - the theoretical max size of a packet of this format
+        //  - some heuristics
+        //  - a desired buffer duration (aproximate)
+        // to determine
+        // - how big each buffer needs to be
+        // - how many packet to read each time we fill a buffer
+
+        //TODO: Push some of this into the constructor for BufferConfig
+        let format = audio_file_read_basic_description(playback_file)?;
+        let max_packet_size = audio_file_read_packet_size_upper_bound(playback_file)?;
+        let buffer_size = calculate_buffer_size(&format, max_packet_size);
+        let packets_per_buffer: u32 = buffer_size / max_packet_size;
+        let is_vbr = format.bytes_per_packet == 0 || format.frames_per_packet == 0;
+        println!("\nAudio format:\n{format:#?}");
+
+        println!("Buffer size: {buffer_size} bytes");
+        println!("Max packet size: {max_packet_size} bytes");
+        println!("Packets per buffer: {packets_per_buffer}");
+
+        let buffer_config = BufferConfig {
+            buffer_size,
+            packets_per_buffer,
+            is_vbr,
+        };
+
+        Ok(Self {
+            playback_file,
+            buffer_config,
+            format,
+        })
+    }
+
+    fn fill_buffer(
+        &self,
+        buffer: BufferRef,
+        from_packet: PacketPosition,
+    ) -> PlaybackResult<PacketCount> {
+        unsafe {
+            let buffer = &mut *buffer;
+            let mut num_bytes = buffer.audio_data_bytes_capacity;
+            let mut num_packets = self.buffer_config.packets_per_buffer;
+            let packet_descriptions = if self.buffer_config.is_vbr {
+                buffer.packet_descriptions
+            } else {
+                ptr::null_mut()
+            };
+
+            let status = sys::audio_file_read_packet_data(
+                self.playback_file,
+                false, // dont use caching
+                &mut num_bytes,
+                packet_descriptions,
+                from_packet,
+                &mut num_packets,
+                buffer.audio_data,
+            );
+
+            if status != 0 {
+                return Err(PlaybackError::FailedToReadFromAudioFile(status));
+            }
+
+            buffer.audio_data_byte_size = num_bytes;
+            buffer.packet_description_count = if self.buffer_config.is_vbr {
+                num_packets
+            } else {
+                0
+            };
+
+            Ok(num_packets)
+        }
+    }
+}
+
+fn audio_file_open(path: String) -> PlaybackResult<AudioFileID> {
     if path.is_empty() {
         return Err(PlaybackError::PathIsEmpty);
     }
@@ -300,9 +358,9 @@ fn audio_file_open(path: String) -> Result<sys::AudioFileID, PlaybackError> {
     }
 }
 
-fn audio_file_close(file_id: sys::AudioFileID) -> Result<(), PlaybackError> {
+fn audio_file_close(file: AudioFileID) -> PlaybackResult<()> {
     unsafe {
-        let status = sys::audio_file_close(file_id);
+        let status = sys::audio_file_close(file);
         if status != 0 {
             return Err(PlaybackError::FailedToCloseAudioFile(status));
         }
@@ -311,11 +369,10 @@ fn audio_file_close(file_id: sys::AudioFileID) -> Result<(), PlaybackError> {
 }
 
 fn audio_file_read_properties(
-    file_id: sys::AudioFileID,
-) -> Result<impl Iterator<Item = (String, String)>, PlaybackError> {
+    file: AudioFileID,
+) -> PlaybackResult<impl Iterator<Item = (String, String)>> {
     unsafe {
-        let info_dict =
-            read_audio_file_property(file_id, sys::AUDIO_FILE_PROPERTY_INFO_DICTIONARY)?;
+        let info_dict = read_audio_file_property(file, sys::AUDIO_FILE_PROPERTY_INFO_DICTIONARY)?;
 
         // Extract keys and values
         let count = sys::cfdictionary_get_count(info_dict);
@@ -342,26 +399,22 @@ fn audio_file_read_properties(
 }
 
 fn audio_file_read_basic_description(
-    file_id: sys::AudioFileID,
-) -> Result<sys::AudioStreamBasicDescription, PlaybackError> {
-    unsafe { read_audio_file_property(file_id, sys::AUDIO_FILE_PROPERTY_DATA_FORMAT) }
+    file: AudioFileID,
+) -> PlaybackResult<sys::AudioStreamBasicDescription> {
+    unsafe { read_audio_file_property(file, sys::AUDIO_FILE_PROPERTY_DATA_FORMAT) }
 }
 
-fn audio_file_read_packet_size_upper_bound(
-    file_id: sys::AudioFileID,
-) -> Result<u32, PlaybackError> {
-    unsafe { read_audio_file_property(file_id, sys::AUDIO_FILE_PROPERTY_PACKET_SIZE_UPPER_BOUND) }
+fn audio_file_read_packet_size_upper_bound(file: AudioFileID) -> PlaybackResult<u32> {
+    unsafe { read_audio_file_property(file, sys::AUDIO_FILE_PROPERTY_PACKET_SIZE_UPPER_BOUND) }
 }
 
-fn audio_file_read_magic_cookie(
-    file_id: sys::AudioFileID,
-) -> Result<Option<Vec<u8>>, PlaybackError> {
+fn audio_file_read_magic_cookie(file: AudioFileID) -> PlaybackResult<Option<Vec<u8>>> {
     unsafe {
         // Check to see if there is a cookie, and if so how large it is.
         let mut cookie_size: u32 = 0;
         let mut is_writable: u32 = 0;
         let status = sys::audio_file_get_property_info(
-            file_id,
+            file,
             sys::AUDIO_FILE_PROPERTY_MAGIC_COOKIE_DATA,
             &mut cookie_size as *mut _,
             &mut is_writable as *mut _,
@@ -382,7 +435,7 @@ fn audio_file_read_magic_cookie(
         let mut data_size = cookie_size;
 
         let status = sys::audio_file_get_property(
-            file_id,
+            file,
             sys::AUDIO_FILE_PROPERTY_MAGIC_COOKIE_DATA,
             &mut data_size as *mut _,
             cookie_data.as_mut_ptr() as *mut c_void,
@@ -400,13 +453,12 @@ fn audio_file_read_magic_cookie(
 fn output_queue_create(
     format: &sys::AudioStreamBasicDescription,
     user_data: *mut c_void,
-    callback: sys::AudioQueueOutputCallback,
-) -> Result<sys::AudioQueueRef, PlaybackError> {
+) -> PlaybackResult<QueueRef> {
     unsafe {
         let mut output_queue = MaybeUninit::uninit();
         let status = sys::audio_queue_new_output(
             format,
-            callback,
+            handle_buffer,
             user_data,
             0 as *const _, // Run loop
             0 as *const _, // Run loop mode
@@ -422,10 +474,7 @@ fn output_queue_create(
     }
 }
 
-fn output_queue_set_magic_cookie(
-    output_queue: sys::AudioQueueRef,
-    cookie: Vec<u8>,
-) -> Result<(), PlaybackError> {
+fn output_queue_set_magic_cookie(output_queue: QueueRef, cookie: Vec<u8>) -> PlaybackResult<()> {
     unsafe {
         let status = sys::audio_queue_set_property(
             output_queue,
@@ -442,7 +491,7 @@ fn output_queue_set_magic_cookie(
     }
 }
 
-fn output_queue_start(output_queue: sys::AudioQueueRef) -> Result<(), PlaybackError> {
+fn output_queue_start(output_queue: QueueRef) -> PlaybackResult<()> {
     unsafe {
         let status = sys::audio_queue_start(output_queue, ptr::null());
 
@@ -454,10 +503,7 @@ fn output_queue_start(output_queue: sys::AudioQueueRef) -> Result<(), PlaybackEr
     }
 }
 
-fn output_queue_stop(
-    output_queue: sys::AudioQueueRef,
-    immediate: bool,
-) -> Result<(), PlaybackError> {
+fn output_queue_stop(output_queue: QueueRef, immediate: bool) -> PlaybackResult<()> {
     unsafe {
         let status = sys::audio_queue_stop(output_queue, immediate);
 
@@ -469,10 +515,7 @@ fn output_queue_stop(
     }
 }
 
-fn output_queue_dispose(
-    output_queue: sys::AudioQueueRef,
-    immediate: bool,
-) -> Result<(), PlaybackError> {
+fn output_queue_dispose(output_queue: QueueRef, immediate: bool) -> PlaybackResult<()> {
     unsafe {
         let status = sys::audio_queue_dispose(output_queue, immediate);
 
@@ -500,10 +543,9 @@ fn calculate_buffer_size(format: &sys::AudioStreamBasicDescription, max_packet_s
 }
 
 fn create_buffers(
-    output_queue: sys::AudioQueueRef,
-    buffer_size: u32,
-    packet_description_count: u32,
-) -> Result<Vec<sys::AudioQueueBufferRef>, PlaybackError> {
+    output_queue: QueueRef,
+    buffer_config: BufferConfig,
+) -> PlaybackResult<Vec<BufferRef>> {
     unsafe {
         vec![MaybeUninit::uninit(); BUFFER_COUNT]
             .into_iter()
@@ -511,8 +553,8 @@ fn create_buffers(
             .map(|mut buffer_ref| {
                 let status = sys::audio_queue_allocate_buffer_with_packet_descriptions(
                     output_queue,
-                    buffer_size,
-                    packet_description_count,
+                    buffer_config.buffer_size,
+                    buffer_config.packet_descriptions(),
                     buffer_ref.as_mut_ptr(),
                 );
                 if status == 0 {
@@ -574,7 +616,7 @@ unsafe fn cfstring_to_string(cfstring: sys::CFStringRef) -> String {
 unsafe fn read_audio_file_property<T>(
     file_id: sys::AudioFileID,
     property: sys::AudioFilePropertyID,
-) -> Result<T, PlaybackError> {
+) -> PlaybackResult<T> {
     let mut data = MaybeUninit::<T>::uninit();
     let mut data_size = mem::size_of::<T>() as u32;
 
@@ -597,11 +639,7 @@ unsafe fn read_audio_file_property<T>(
     Ok(data)
 }
 
-extern "C" fn handle_buffer(
-    user_data: *mut c_void,
-    audio_queue: sys::AudioQueueRef,
-    buffer: sys::AudioQueueBufferRef,
-) {
+extern "C" fn handle_buffer(user_data: *mut c_void, audio_queue: QueueRef, buffer: BufferRef) {
     println!("Callback thread id: {:?}", std::thread::current().id());
 
     unsafe {
@@ -614,6 +652,8 @@ extern "C" fn handle_buffer(
         // The other is to actually handle the stopping on this thread...
         // (i.e the other thread asks us to stop)
         // ... but what if we got asked to stop half way through reading a file? Hmm.
+        // Do we want this to happen here... or inside the handler...
+        // ... and what about synchronous pre-buffering?
         if let Err(error) = handler.enqueue_next_buffer(audio_queue, buffer) {
             //TODO: Handle error properly, send back to main thread somehow?
             println!("oh no: {error}");
