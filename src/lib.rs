@@ -111,21 +111,19 @@ pub fn play(path: String) -> PlaybackResult<()> {
         println!("{k}: {v}");
     }
 
-    let reader = AudioFileReader::new(playback_file)?;
-    //TODO: Avoid redunantly reading format
-    let format = audio_file_read_basic_description(playback_file)?;
-    //TODO: Hmmm, could we do better here...?
-    let buffer_config = reader.buffer_config;
+    //TODO: Maybe buffer config can be a builder afterall?...
+    let buffer_config = BufferConfig::from_audio_file(playback_file)?;
+    let reader = AudioFileReader::new(playback_file, &buffer_config);
     let mut handler = PlaybackHandler::new(reader);
     let handler_ptr = &mut handler as *mut _ as *mut c_void;
-    let output_queue = output_queue_create(&format, handler_ptr)?;
+    let format_ptr = &buffer_config.format as *const _;
+    let output_queue = output_queue_create(format_ptr, handler_ptr)?;
+    let buffers = create_buffers(output_queue, &buffer_config)?;
 
     if let Some(cookie) = audio_file_read_magic_cookie(playback_file)? {
         println!("Magic cookie is {} bytes", cookie.len());
         output_queue_set_magic_cookie(output_queue, cookie)?;
     }
-
-    let buffers = create_buffers(output_queue, buffer_config)?;
 
     // Pre load buffers with audio
     // For small files, this might result only some of the buffers being enqueued.
@@ -200,6 +198,7 @@ impl PlaybackHandler {
                 return Ok(true);
             }
 
+            //TODO: Extract
             let status = sys::audio_queue_enqueue_buffer(
                 audio_queue,
                 buffer,
@@ -218,14 +217,40 @@ impl PlaybackHandler {
     }
 }
 
-#[derive(Copy, Clone)]
 struct BufferConfig {
-    packets_per_buffer: PacketCount,
     buffer_size: u32,
+    packets_per_buffer: PacketCount,
+    format: sys::AudioStreamBasicDescription,
     is_vbr: bool,
 }
 
 impl BufferConfig {
+    fn from_audio_file(file: AudioFileID) -> PlaybackResult<Self> {
+        // Use
+        //  - the theoretical max size of a packet of this format
+        //  - some heuristics
+        //  - a desired buffer duration (aproximate)
+        // to determine
+        // - how big each buffer needs to be
+        // - how many packet to read each time we fill a buffer
+
+        let format = audio_file_read_basic_description(file)?;
+        let max_packet_size = audio_file_read_packet_size_upper_bound(file)?;
+        let buffer_size = calculate_buffer_size(&format, max_packet_size);
+        let packets_per_buffer: u32 = buffer_size / max_packet_size;
+        let is_vbr = format.bytes_per_packet == 0 || format.frames_per_packet == 0;
+        println!("Buffer size: {buffer_size} bytes");
+        println!("Max packet size: {max_packet_size} bytes");
+        println!("Packets per buffer: {packets_per_buffer}");
+        println!("\nAudio format:\n{format:#?}");
+        Ok(BufferConfig {
+            buffer_size,
+            packets_per_buffer,
+            format,
+            is_vbr,
+        })
+    }
+
     fn packet_descriptions(&self) -> PacketCount {
         if self.is_vbr {
             self.packets_per_buffer
@@ -235,48 +260,20 @@ impl BufferConfig {
     }
 }
 
-//TODO: Is this maybe more like a builder thing, that returns a reader, a queue
-// and other bits? How about "PlaybackContext"?
 struct AudioFileReader {
     playback_file: AudioFileID,
-    buffer_config: BufferConfig,
-    format: sys::AudioStreamBasicDescription,
+    packets_per_buffer: PacketCount,
+    is_vbr: bool,
 }
 
-//TODO: Can we introduce a strategy pattern internally to optimise vbr?
 impl AudioFileReader {
-    fn new(playback_file: AudioFileID) -> PlaybackResult<Self> {
-        // Use
-        //  - the theoretical max size of a packet of this format
-        //  - some heuristics
-        //  - a desired buffer duration (aproximate)
-        // to determine
-        // - how big each buffer needs to be
-        // - how many packet to read each time we fill a buffer
-
-        //TODO: Push some of this into the constructor for BufferConfig
-        let format = audio_file_read_basic_description(playback_file)?;
-        let max_packet_size = audio_file_read_packet_size_upper_bound(playback_file)?;
-        let buffer_size = calculate_buffer_size(&format, max_packet_size);
-        let packets_per_buffer: u32 = buffer_size / max_packet_size;
-        let is_vbr = format.bytes_per_packet == 0 || format.frames_per_packet == 0;
-        println!("\nAudio format:\n{format:#?}");
-
-        println!("Buffer size: {buffer_size} bytes");
-        println!("Max packet size: {max_packet_size} bytes");
-        println!("Packets per buffer: {packets_per_buffer}");
-
-        let buffer_config = BufferConfig {
-            buffer_size,
-            packets_per_buffer,
-            is_vbr,
-        };
-
-        Ok(Self {
+    fn new(playback_file: AudioFileID, buffer_config: &BufferConfig) -> Self {
+        //TODO: Can we introduce a strategy pattern internally to optimise vbr?
+        Self {
             playback_file,
-            buffer_config,
-            format,
-        })
+            packets_per_buffer: buffer_config.packets_per_buffer,
+            is_vbr: buffer_config.is_vbr,
+        }
     }
 
     fn fill_buffer(
@@ -287,8 +284,8 @@ impl AudioFileReader {
         unsafe {
             let buffer = &mut *buffer;
             let mut num_bytes = buffer.audio_data_bytes_capacity;
-            let mut num_packets = self.buffer_config.packets_per_buffer;
-            let packet_descriptions = if self.buffer_config.is_vbr {
+            let mut num_packets = self.packets_per_buffer;
+            let packet_descriptions = if self.is_vbr {
                 buffer.packet_descriptions
             } else {
                 ptr::null_mut()
@@ -309,11 +306,7 @@ impl AudioFileReader {
             }
 
             buffer.audio_data_byte_size = num_bytes;
-            buffer.packet_description_count = if self.buffer_config.is_vbr {
-                num_packets
-            } else {
-                0
-            };
+            buffer.packet_description_count = if self.is_vbr { num_packets } else { 0 };
 
             Ok(num_packets)
         }
@@ -451,7 +444,7 @@ fn audio_file_read_magic_cookie(file: AudioFileID) -> PlaybackResult<Option<Vec<
 }
 
 fn output_queue_create(
-    format: &sys::AudioStreamBasicDescription,
+    format: *const sys::AudioStreamBasicDescription,
     user_data: *mut c_void,
 ) -> PlaybackResult<QueueRef> {
     unsafe {
@@ -544,7 +537,7 @@ fn calculate_buffer_size(format: &sys::AudioStreamBasicDescription, max_packet_s
 
 fn create_buffers(
     output_queue: QueueRef,
-    buffer_config: BufferConfig,
+    buffer_config: &BufferConfig,
 ) -> PlaybackResult<Vec<BufferRef>> {
     unsafe {
         vec![MaybeUninit::uninit(); BUFFER_COUNT]
