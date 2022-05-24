@@ -108,14 +108,18 @@ impl fmt::Display for PlaybackError {
 pub fn play(path: &str) -> PlaybackResult<()> {
     println!("Main thread id: {:?}", std::thread::current().id());
 
-    let player = AudioFilePlayer::from_audio_file(path)?;
+    let playback_file = audio_file_open(path)?;
+    let audio_metadata = audio_file_read_properties(playback_file)?;
+    let buffer_config = calculate_buffer_configuration(playback_file)?;
 
     println!("Properties:");
-    for (k, v) in player.file_metadata()? {
+    for (k, v) in audio_metadata {
         println!("{k}: {v}");
     }
 
-    let mut playing_file = player.play()?;
+    println!("{buffer_config:?}");
+
+    let mut currently_playing = begin_playback(playback_file, buffer_config)?;
 
     //FIXME: Create real controls
     loop {
@@ -123,131 +127,111 @@ pub fn play(path: &str) -> PlaybackResult<()> {
         std::io::stdin().read_line(&mut input).unwrap();
         match input.trim().to_lowercase().as_str() {
             "q" => {
+                stop_playback(&mut currently_playing)?;
+                audio_file_close(playback_file)?;
                 println!("exiting");
                 break;
             }
             "p" => {
-                playing_file.toggle_pause()?;
+                toggle_pause(&mut currently_playing)?;
             }
             _ => {}
         }
     }
 
-    playing_file.stop()?;
-
     Ok(())
 }
 
 struct PlayingFile {
-    file_id: AudioFileID,
     output_queue: AudioQueueRef,
     handler: Box<PlaybackHandler>,
     paused: bool,
 }
 
-impl PlayingFile {
-    fn stop(self) -> PlaybackResult<()> {
-        audio_queue_stop(self.output_queue, true)?;
-        audio_queue_dispose(self.output_queue, true)?;
-        audio_file_close(self.file_id)
-    }
-
-    fn toggle_pause(&mut self) -> PlaybackResult<()> {
-        if self.paused {
-            audio_queue_start(self.output_queue)?;
-        } else {
-            audio_queue_pause(self.output_queue)?;
-        }
-        self.paused = !self.paused;
-        Ok(())
-    }
+fn stop_playback(playing: &mut PlayingFile) -> PlaybackResult<()> {
+    audio_queue_stop(playing.output_queue, true)?;
+    audio_queue_dispose(playing.output_queue, true)
 }
 
-struct AudioFilePlayer {
-    playback_file: AudioFileID,
+fn toggle_pause(playing: &mut PlayingFile) -> PlaybackResult<()> {
+    if playing.paused {
+        audio_queue_start(playing.output_queue)?;
+    } else {
+        audio_queue_pause(playing.output_queue)?;
+    }
+    playing.paused = !playing.paused;
+    Ok(())
+}
+
+#[derive(Debug)]
+struct BufferConfiguration {
     format: sys::AudioStreamBasicDescription,
     buffer_size: u32,
     packets_per_buffer: PacketCount,
     is_vbr: bool,
 }
 
-//FIXME: Dropping while playing will likely cause a dangling pointer for the
-// audio queue worker callback thread
-impl AudioFilePlayer {
-    fn from_audio_file(path: &str) -> PlaybackResult<Self> {
-        // Use
-        //  - the theoretical max size of a packet of this format
-        //  - some heuristics
-        //  - a desired buffer duration (aproximate)
-        // to determine
-        // - how big each buffer needs to be
-        // - how many packet to read each time we fill a buffer
+fn calculate_buffer_configuration(audio_file: AudioFileID) -> PlaybackResult<BufferConfiguration> {
+    // Use
+    //  - the theoretical max size of a packet of this format
+    //  - some heuristics
+    //  - a desired buffer duration (aproximate)
+    // to determine
+    // - how big each buffer needs to be
+    // - how many packet to read each time we fill a buffer
 
-        let playback_file = audio_file_open(path)?;
-        let format = audio_file_read_basic_description(playback_file)?;
-        let max_packet_size = audio_file_read_packet_size_upper_bound(playback_file)?;
-        let buffer_size = calculate_buffer_size(&format, max_packet_size);
-        let packets_per_buffer: u32 = buffer_size / max_packet_size;
-        let is_vbr = format.bytes_per_packet == 0 || format.frames_per_packet == 0;
+    let format = audio_file_read_basic_description(audio_file)?;
+    let max_packet_size = audio_file_read_packet_size_upper_bound(audio_file)?;
+    let buffer_size = calculate_buffer_size(&format, max_packet_size);
+    let is_vbr = format.bytes_per_packet == 0 || format.frames_per_packet == 0;
+    let packets_per_buffer = buffer_size / max_packet_size;
 
-        println!("Buffer size: {buffer_size} bytes");
-        println!("Max packet size: {max_packet_size} bytes");
-        println!("Packets per buffer: {packets_per_buffer}");
-        println!("\nAudio format:\n{format:#?}");
+    Ok(BufferConfiguration {
+        format,
+        buffer_size,
+        packets_per_buffer,
+        is_vbr,
+    })
+}
 
-        Ok(Self {
-            playback_file,
-            format,
-            buffer_size,
-            packets_per_buffer,
-            is_vbr,
-        })
+fn begin_playback(
+    audio_file: AudioFileID,
+    buffer_config: BufferConfiguration,
+) -> PlaybackResult<PlayingFile> {
+    // Use box to provide memory location that outlives this method call
+    let mut handler = Box::new(PlaybackHandler::new(
+        audio_file,
+        buffer_config.packets_per_buffer,
+        buffer_config.is_vbr,
+    ));
+
+    let packet_descs = match buffer_config.is_vbr {
+        true => buffer_config.packets_per_buffer,
+        false => 0,
+    };
+
+    let handler_ptr = &mut *handler as *mut _ as *mut c_void;
+    let output_queue = output_queue_create(&buffer_config.format, handler_ptr)?;
+    let buffers = create_buffers(output_queue, buffer_config.buffer_size, packet_descs)?;
+
+    if let Some(cookie) = audio_file_read_magic_cookie(audio_file)? {
+        println!("Magic cookie is {} bytes", cookie.len());
+        audio_queue_set_magic_cookie(output_queue, cookie)?;
     }
 
-    //TODO: Make it possible to read file metadata without having to figure out
-    // buffer stuff This could work by making file_id a first class concern, or
-    // by generally being more data oriented
-    fn file_metadata(&self) -> PlaybackResult<impl Iterator<Item = (String, String)>> {
-        audio_file_read_properties(self.playback_file)
+    // Pre load buffers with audio
+    // For small files, this might result only some of the buffers being enqueued.
+    for buffer_ref in buffers {
+        handler.enqueue_next_buffer(output_queue, buffer_ref)?;
     }
 
-    fn play(&self) -> PlaybackResult<PlayingFile> {
-        // Use box to provide memory location that outlives this method call
-        let mut handler = Box::new(PlaybackHandler::new(
-            self.playback_file,
-            self.packets_per_buffer,
-            self.is_vbr,
-        ));
+    audio_queue_start(output_queue)?;
 
-        let packet_descs = match self.is_vbr {
-            true => self.packets_per_buffer,
-            false => 0,
-        };
-
-        let handler_ptr = &mut *handler as *mut _ as *mut c_void;
-        let output_queue = output_queue_create(&self.format, handler_ptr)?;
-        let buffers = create_buffers(output_queue, self.buffer_size, packet_descs)?;
-
-        if let Some(cookie) = audio_file_read_magic_cookie(self.playback_file)? {
-            println!("Magic cookie is {} bytes", cookie.len());
-            audio_queue_set_magic_cookie(output_queue, cookie)?;
-        }
-
-        // Pre load buffers with audio
-        // For small files, this might result only some of the buffers being enqueued.
-        for buffer_ref in buffers {
-            handler.enqueue_next_buffer(output_queue, buffer_ref)?;
-        }
-
-        audio_queue_start(output_queue)?;
-
-        Ok(PlayingFile {
-            file_id: self.playback_file,
-            output_queue,
-            handler,
-            paused: false,
-        })
-    }
+    Ok(PlayingFile {
+        output_queue,
+        handler,
+        paused: false,
+    })
 }
 
 #[derive(Debug)]
