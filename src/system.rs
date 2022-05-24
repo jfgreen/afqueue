@@ -557,6 +557,18 @@ extern "C" {
     /// interact with the audio queue.
     #[link_name = "AudioQueueDispose"]
     pub fn audio_queue_dispose(in_aq: AudioQueueRef, in_immediate: bool) -> OSStatus;
+
+    /// Pause an audio queue.
+    ///
+    /// Pauses recording or playback of audio queue `in_aq`.
+    ///
+    /// Pausing does not disturb the buffers or reset the queue.
+    ///
+    /// Playback or recording can be resumed by calling `audio_queue_start`.
+    ///
+    /// Returns an error on failure.
+    #[link_name = "AudioQueuePause"]
+    pub fn audio_queue_pause(in_aq: AudioQueueRef) -> OSStatus;
 }
 
 /// A reference to an opaque CFURL object.

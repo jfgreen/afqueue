@@ -10,6 +10,7 @@ use std::fmt;
 use std::mem::{self, MaybeUninit};
 use std::ptr;
 
+//TODO: Can we pull out a safeish wrapper layer for the sys level stuff
 mod system;
 
 use system::{self as sys, AudioFileID, AudioQueueBufferRef, AudioQueueRef};
@@ -37,6 +38,7 @@ pub enum PlaybackError {
     FailedToAllocateBuffer(SystemErrorCode),
     FailedToStartAudioQueue(SystemErrorCode),
     FailedToStopAudioQueue(SystemErrorCode),
+    FailedToPauseAudioQueue(SystemErrorCode),
     FailedToDisposeAudioQueue(SystemErrorCode),
     FailedToReadFromAudioFile(SystemErrorCode),
     FailedToEnqueueBuffer(SystemErrorCode),
@@ -84,6 +86,9 @@ impl fmt::Display for PlaybackError {
             PlaybackError::FailedToStopAudioQueue(code) => {
                 write!(f, "Failed to stop audio queue, error: {}", code)
             }
+            PlaybackError::FailedToPauseAudioQueue(code) => {
+                write!(f, "Failed to pause audio queue, error: {}", code)
+            }
             PlaybackError::FailedToDisposeAudioQueue(code) => {
                 write!(f, "Failed to dispose audio queue, error: {}", code)
             }
@@ -111,11 +116,23 @@ pub fn play(path: &str) -> PlaybackResult<()> {
         println!("{k}: {v}");
     }
 
-    let playing_file = player.play()?;
+    let mut playing_file = player.play()?;
 
     //FIXME: Create real controls
-    let mut input = String::new();
-    std::io::stdin().read_line(&mut input).unwrap();
+    loop {
+        let mut input = String::new();
+        std::io::stdin().read_line(&mut input).unwrap();
+        match input.trim().to_lowercase().as_str() {
+            "q" => {
+                println!("exiting");
+                break;
+            }
+            "p" => {
+                playing_file.toggle_pause()?;
+            }
+            _ => {}
+        }
+    }
 
     playing_file.stop()?;
 
@@ -126,6 +143,7 @@ struct PlayingFile {
     file_id: AudioFileID,
     output_queue: AudioQueueRef,
     handler: Box<PlaybackHandler>,
+    paused: bool,
 }
 
 impl PlayingFile {
@@ -133,6 +151,16 @@ impl PlayingFile {
         output_queue_stop(self.output_queue, true)?;
         output_queue_dispose(self.output_queue, true)?;
         audio_file_close(self.file_id)
+    }
+
+    fn toggle_pause(&mut self) -> PlaybackResult<()> {
+        if self.paused {
+            output_queue_start(self.output_queue)?;
+        } else {
+            output_queue_pause(self.output_queue)?;
+        }
+        self.paused = !self.paused;
+        Ok(())
     }
 }
 
@@ -177,6 +205,9 @@ impl AudioFilePlayer {
         })
     }
 
+    //TODO: Make it possible to read file metadata without having to figure out
+    // buffer stuff This could work by making file_id a first class concern, or
+    // by generally being more data oriented
     fn file_metadata(&self) -> PlaybackResult<impl Iterator<Item = (String, String)>> {
         audio_file_read_properties(self.playback_file)
     }
@@ -215,6 +246,7 @@ impl AudioFilePlayer {
             file_id: self.playback_file,
             output_queue,
             handler,
+            paused: false,
         })
     }
 }
@@ -277,7 +309,7 @@ impl PlaybackHandler {
                 return Ok(true);
             }
 
-            //TODO: Extract
+            //TODO: Extract?
             let status = sys::audio_queue_enqueue_buffer(
                 audio_queue,
                 buffer,
@@ -502,6 +534,7 @@ fn output_queue_set_magic_cookie(
     }
 }
 
+//TODO: Should these be prefixed audio_queue_ instead?
 fn output_queue_start(output_queue: AudioQueueRef) -> PlaybackResult<()> {
     unsafe {
         let status = sys::audio_queue_start(output_queue, ptr::null());
@@ -534,6 +567,18 @@ fn output_queue_dispose(output_queue: AudioQueueRef, immediate: bool) -> Playbac
             Ok(())
         } else {
             Err(PlaybackError::FailedToDisposeAudioQueue(status))
+        }
+    }
+}
+
+fn output_queue_pause(output_queue: AudioQueueRef) -> PlaybackResult<()> {
+    unsafe {
+        let status = sys::audio_queue_pause(output_queue);
+
+        if status == 0 {
+            Ok(())
+        } else {
+            Err(PlaybackError::FailedToPauseAudioQueue(status))
         }
     }
 }
