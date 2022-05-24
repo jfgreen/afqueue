@@ -5,10 +5,10 @@ use std::{env, process};
 fn main() {
     let args = env::args();
     let audio_file_path = parse_args(args);
-    playback_file(audio_file_path);
+    playback_file(&audio_file_path);
 }
 
-fn playback_file(path: String) {
+fn playback_file(path: &str) {
     play(path).unwrap_or_else(|err| {
         println!("Failed to playback files");
         println!("{}", err);
