@@ -10,7 +10,6 @@ use std::fmt;
 use std::mem::{self, MaybeUninit};
 use std::ptr;
 
-//TODO: Can we pull out a safeish wrapper layer for the sys level stuff
 mod system;
 
 use system::{self as sys, AudioFileID, AudioQueueBufferRef, AudioQueueRef};
@@ -148,16 +147,16 @@ struct PlayingFile {
 
 impl PlayingFile {
     fn stop(self) -> PlaybackResult<()> {
-        output_queue_stop(self.output_queue, true)?;
-        output_queue_dispose(self.output_queue, true)?;
+        audio_queue_stop(self.output_queue, true)?;
+        audio_queue_dispose(self.output_queue, true)?;
         audio_file_close(self.file_id)
     }
 
     fn toggle_pause(&mut self) -> PlaybackResult<()> {
         if self.paused {
-            output_queue_start(self.output_queue)?;
+            audio_queue_start(self.output_queue)?;
         } else {
-            output_queue_pause(self.output_queue)?;
+            audio_queue_pause(self.output_queue)?;
         }
         self.paused = !self.paused;
         Ok(())
@@ -231,7 +230,7 @@ impl AudioFilePlayer {
 
         if let Some(cookie) = audio_file_read_magic_cookie(self.playback_file)? {
             println!("Magic cookie is {} bytes", cookie.len());
-            output_queue_set_magic_cookie(output_queue, cookie)?;
+            audio_queue_set_magic_cookie(output_queue, cookie)?;
         }
 
         // Pre load buffers with audio
@@ -240,7 +239,7 @@ impl AudioFilePlayer {
             handler.enqueue_next_buffer(output_queue, buffer_ref)?;
         }
 
-        output_queue_start(output_queue)?;
+        audio_queue_start(output_queue)?;
 
         Ok(PlayingFile {
             file_id: self.playback_file,
@@ -514,13 +513,10 @@ fn output_queue_create(
     }
 }
 
-fn output_queue_set_magic_cookie(
-    output_queue: AudioQueueRef,
-    cookie: Vec<u8>,
-) -> PlaybackResult<()> {
+fn audio_queue_set_magic_cookie(queue: AudioQueueRef, cookie: Vec<u8>) -> PlaybackResult<()> {
     unsafe {
         let status = sys::audio_queue_set_property(
-            output_queue,
+            queue,
             system::AUDIO_QUEUE_PROPERTY_MAGIC_COOKIE_DATA,
             cookie.as_ptr() as *const c_void,
             cookie.len() as u32,
@@ -534,10 +530,9 @@ fn output_queue_set_magic_cookie(
     }
 }
 
-//TODO: Should these be prefixed audio_queue_ instead?
-fn output_queue_start(output_queue: AudioQueueRef) -> PlaybackResult<()> {
+fn audio_queue_start(queue: AudioQueueRef) -> PlaybackResult<()> {
     unsafe {
-        let status = sys::audio_queue_start(output_queue, ptr::null());
+        let status = sys::audio_queue_start(queue, ptr::null());
 
         if status == 0 {
             Ok(())
@@ -547,9 +542,9 @@ fn output_queue_start(output_queue: AudioQueueRef) -> PlaybackResult<()> {
     }
 }
 
-fn output_queue_stop(output_queue: AudioQueueRef, immediate: bool) -> PlaybackResult<()> {
+fn audio_queue_stop(queue: AudioQueueRef, immediate: bool) -> PlaybackResult<()> {
     unsafe {
-        let status = sys::audio_queue_stop(output_queue, immediate);
+        let status = sys::audio_queue_stop(queue, immediate);
 
         if status == 0 {
             Ok(())
@@ -559,9 +554,9 @@ fn output_queue_stop(output_queue: AudioQueueRef, immediate: bool) -> PlaybackRe
     }
 }
 
-fn output_queue_dispose(output_queue: AudioQueueRef, immediate: bool) -> PlaybackResult<()> {
+fn audio_queue_dispose(queue: AudioQueueRef, immediate: bool) -> PlaybackResult<()> {
     unsafe {
-        let status = sys::audio_queue_dispose(output_queue, immediate);
+        let status = sys::audio_queue_dispose(queue, immediate);
 
         if status == 0 {
             Ok(())
@@ -571,9 +566,9 @@ fn output_queue_dispose(output_queue: AudioQueueRef, immediate: bool) -> Playbac
     }
 }
 
-fn output_queue_pause(output_queue: AudioQueueRef) -> PlaybackResult<()> {
+fn audio_queue_pause(queue: AudioQueueRef) -> PlaybackResult<()> {
     unsafe {
-        let status = sys::audio_queue_pause(output_queue);
+        let status = sys::audio_queue_pause(queue);
 
         if status == 0 {
             Ok(())
