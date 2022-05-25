@@ -198,11 +198,17 @@ fn begin_playback(
     audio_file: AudioFileID,
     buffer_config: BufferConfiguration,
 ) -> PlaybackResult<PlayingFile> {
+    let reader = if buffer_config.is_vbr {
+        audio_file_read_vbr_packet_data
+    } else {
+        audio_file_read_cbr_packet_data
+    };
+
     // Use box to provide memory location that outlives this method call
     let mut state = Box::new(PlaybackState {
         playback_file: audio_file,
         packets_per_buffer: buffer_config.packets_per_buffer,
-        is_vbr: buffer_config.is_vbr,
+        reader,
         current_packet: 0,
         finished: false,
     });
@@ -239,8 +245,8 @@ fn begin_playback(
 #[derive(Debug)]
 struct PlaybackState {
     playback_file: AudioFileID,
+    reader: AudioFileReader,
     packets_per_buffer: PacketCount,
-    is_vbr: bool,
     current_packet: PacketPosition,
     finished: bool,
 }
@@ -277,21 +283,12 @@ fn enqueue_next_buffer(
     }
 
     //TODO: Could we store the function we want to use in the struct?
-    let packets_read = if state.is_vbr {
-        audio_file_read_vbr_packet_data(
-            state.playback_file,
-            state.current_packet,
-            state.packets_per_buffer,
-            buffer,
-        )?
-    } else {
-        audio_file_read_cbr_packet_data(
-            state.playback_file,
-            state.current_packet,
-            state.packets_per_buffer,
-            buffer,
-        )?
-    };
+    let packets_read = (state.reader)(
+        state.playback_file,
+        state.current_packet,
+        state.packets_per_buffer,
+        buffer,
+    )?;
 
     if packets_read == 0 {
         state.finished = true;
@@ -316,6 +313,13 @@ fn enqueue_next_buffer(
         Ok(false)
     }
 }
+
+type AudioFileReader = fn(
+    file: AudioFileID,
+    from_packet: PacketPosition,
+    packets: PacketCount,
+    buffer: AudioQueueBufferRef,
+) -> PlaybackResult<PacketCount>;
 
 fn audio_file_read_vbr_packet_data(
     file: AudioFileID,
