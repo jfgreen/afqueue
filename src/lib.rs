@@ -144,7 +144,7 @@ pub fn play(path: &str) -> PlaybackResult<()> {
 
 struct PlayingFile {
     output_queue: AudioQueueRef,
-    handler: Box<PlaybackHandler>,
+    state: Box<PlaybackState>,
     paused: bool,
 }
 
@@ -199,19 +199,21 @@ fn begin_playback(
     buffer_config: BufferConfiguration,
 ) -> PlaybackResult<PlayingFile> {
     // Use box to provide memory location that outlives this method call
-    let mut handler = Box::new(PlaybackHandler::new(
-        audio_file,
-        buffer_config.packets_per_buffer,
-        buffer_config.is_vbr,
-    ));
+    let mut state = Box::new(PlaybackState {
+        playback_file: audio_file,
+        packets_per_buffer: buffer_config.packets_per_buffer,
+        is_vbr: buffer_config.is_vbr,
+        current_packet: 0,
+        finished: false,
+    });
 
     let packet_descs = match buffer_config.is_vbr {
         true => buffer_config.packets_per_buffer,
         false => 0,
     };
 
-    let handler_ptr = &mut *handler as *mut _ as *mut c_void;
-    let output_queue = output_queue_create(&buffer_config.format, handler_ptr)?;
+    let state_ptr = &mut *state as *mut _ as *mut c_void;
+    let output_queue = output_queue_create(&buffer_config.format, state_ptr)?;
     let buffers = create_buffers(output_queue, buffer_config.buffer_size, packet_descs)?;
 
     if let Some(cookie) = audio_file_read_magic_cookie(audio_file)? {
@@ -222,20 +224,20 @@ fn begin_playback(
     // Pre load buffers with audio
     // For small files, this might result only some of the buffers being enqueued.
     for buffer_ref in buffers {
-        handler.enqueue_next_buffer(output_queue, buffer_ref)?;
+        enqueue_next_buffer(&mut state, output_queue, buffer_ref)?;
     }
 
     audio_queue_start(output_queue)?;
 
     Ok(PlayingFile {
         output_queue,
-        handler,
+        state,
         paused: false,
     })
 }
 
 #[derive(Debug)]
-struct PlaybackHandler {
+struct PlaybackState {
     playback_file: AudioFileID,
     packets_per_buffer: PacketCount,
     is_vbr: bool,
@@ -243,103 +245,139 @@ struct PlaybackHandler {
     finished: bool,
 }
 
-//TODO: Can we introduce a strategy pattern internally to optimise vbr?
-impl PlaybackHandler {
-    fn new(playback_file: AudioFileID, packets_per_buffer: PacketCount, is_vbr: bool) -> Self {
-        Self {
-            playback_file,
-            packets_per_buffer,
-            is_vbr,
-            current_packet: 0,
-            finished: false,
-        }
-    }
-    // This handler assumes `buffer` adheres to several invarients:
-    // - Are at least `packets_per_buffer` big
-    // - Were allocated with packet descriptions
-    // - Belong to `audio_queue`
-    fn enqueue_next_buffer(
-        &mut self,
-        audio_queue: AudioQueueRef,
-        buffer: AudioQueueBufferRef,
-    ) -> PlaybackResult<bool> {
-        // TODO: Should always we ask for more packets than buffer can hold to ensure
-        // the buffer gets fully used?
-        //
-        // We could calculate the max packets per buffer instead of minimum? I.e
-        // optimistic instead of pessamistic.
-        //
-        // This would possibly take advantage of the properties AudioFileReadPacketData
-        // has over AudioFileReadPackets?
-        //
-        // We would still need an upper limit (and overallocate) the
-        // packet_descriptions.
-        //
-        // Is there somehow we could test this by detecting underutilized buffers?
+// This handler assumes `buffer` adheres to several invarients:
+// - Are at least `packets_per_buffer` big
+// - Were allocated with packet descriptions
+// - Belong to `audio_queue`
+fn enqueue_next_buffer(
+    state: &mut PlaybackState,
+    audio_queue: AudioQueueRef,
+    buffer: AudioQueueBufferRef,
+) -> PlaybackResult<bool> {
+    // TODO: Can we introduce a strategy pattern internally to optimise vbr?
+    // TODO: Should always we ask for more packets than buffer can hold to ensure
+    // the buffer gets fully used?
+    //
+    // We could calculate the max packets per buffer instead of minimum? I.e
+    // optimistic instead of pessamistic.
+    //
+    // This would possibly take advantage of the properties AudioFileReadPacketData
+    // has over AudioFileReadPackets?
+    //
+    // We would still need an upper limit (and overallocate) the
+    // packet_descriptions.
+    //
+    // Is there somehow we could test this by detecting underutilized buffers?
 
-        // The queue could continue to callback with remaining buffers.
-        // Avoid unnecessary attempts to read the file again.
-        if self.finished {
-            println!("ignoring request to fill buffer");
-            return Ok(true);
-        }
-
-        unsafe {
-            let packets_read = self.fill_buffer(buffer)?;
-
-            if packets_read == 0 {
-                self.finished = true;
-                return Ok(true);
-            }
-
-            //TODO: Extract?
-            let status = sys::audio_queue_enqueue_buffer(
-                audio_queue,
-                buffer,
-                // Packet descriptions are supplied via buffer itself
-                0,
-                ptr::null(),
-            );
-
-            if status != 0 {
-                return Err(PlaybackError::FailedToEnqueueBuffer(status));
-            }
-
-            self.current_packet += packets_read as i64;
-            Ok(false)
-        }
+    // The queue could continue to callback with remaining buffers.
+    // Avoid unnecessary attempts to read the file again.
+    if state.finished {
+        println!("ignoring request to fill buffer");
+        return Ok(true);
     }
 
-    fn fill_buffer(&self, buffer: AudioQueueBufferRef) -> PlaybackResult<PacketCount> {
-        unsafe {
-            let buffer = &mut *buffer;
-            let mut num_bytes = buffer.audio_data_bytes_capacity;
-            let mut num_packets = self.packets_per_buffer;
-            let packet_descriptions = if self.is_vbr {
-                buffer.packet_descriptions
-            } else {
-                ptr::null_mut()
-            };
+    //TODO: Could we store the function we want to use in the struct?
+    let packets_read = if state.is_vbr {
+        audio_file_read_vbr_packet_data(
+            state.playback_file,
+            state.current_packet,
+            state.packets_per_buffer,
+            buffer,
+        )?
+    } else {
+        audio_file_read_cbr_packet_data(
+            state.playback_file,
+            state.current_packet,
+            state.packets_per_buffer,
+            buffer,
+        )?
+    };
 
-            let status = sys::audio_file_read_packet_data(
-                self.playback_file,
-                false, // dont use caching
-                &mut num_bytes,
-                packet_descriptions,
-                self.current_packet,
-                &mut num_packets,
-                buffer.audio_data,
-            );
+    if packets_read == 0 {
+        state.finished = true;
+        return Ok(true);
+    }
 
-            if status != 0 {
-                return Err(PlaybackError::FailedToReadFromAudioFile(status));
-            }
+    unsafe {
+        //TODO: Extract?
+        let status = sys::audio_queue_enqueue_buffer(
+            audio_queue,
+            buffer,
+            // Packet descriptions are supplied via buffer itself
+            0,
+            ptr::null(),
+        );
 
-            buffer.audio_data_byte_size = num_bytes;
-            buffer.packet_description_count = if self.is_vbr { num_packets } else { 0 };
-
-            Ok(num_packets)
+        if status != 0 {
+            return Err(PlaybackError::FailedToEnqueueBuffer(status));
         }
+
+        state.current_packet += packets_read as i64;
+        Ok(false)
+    }
+}
+
+fn audio_file_read_vbr_packet_data(
+    file: AudioFileID,
+    from_packet: PacketPosition,
+    packets: PacketCount,
+    buffer: AudioQueueBufferRef,
+) -> PlaybackResult<PacketCount> {
+    unsafe {
+        let buffer = &mut *buffer;
+        let mut num_bytes = buffer.audio_data_bytes_capacity;
+        let mut num_packets = packets;
+
+        let status = sys::audio_file_read_packet_data(
+            file,
+            false, // dont use caching
+            &mut num_bytes,
+            buffer.packet_descriptions,
+            from_packet,
+            &mut num_packets,
+            buffer.audio_data,
+        );
+
+        if status != 0 {
+            return Err(PlaybackError::FailedToReadFromAudioFile(status));
+        }
+
+        buffer.audio_data_byte_size = num_bytes;
+        buffer.packet_description_count = num_packets;
+
+        Ok(num_packets)
+    }
+}
+
+fn audio_file_read_cbr_packet_data(
+    file: AudioFileID,
+    from_packet: PacketPosition,
+    packets: PacketCount,
+    buffer: AudioQueueBufferRef,
+) -> PlaybackResult<PacketCount> {
+    unsafe {
+        let buffer = &mut *buffer;
+        let mut num_bytes = buffer.audio_data_bytes_capacity;
+        let mut num_packets = packets;
+
+        let status = sys::audio_file_read_packet_data(
+            file,
+            false, // dont use caching
+            &mut num_bytes,
+            ptr::null_mut(),
+            from_packet,
+            &mut num_packets,
+            buffer.audio_data,
+        );
+
+        if status != 0 {
+            return Err(PlaybackError::FailedToReadFromAudioFile(status));
+        }
+
+        buffer.audio_data_byte_size = num_bytes;
+        buffer.packet_description_count = 0;
+
+        Ok(num_packets)
     }
 }
 
@@ -683,8 +721,8 @@ extern "C" fn handle_buffer(
     println!("Callback thread id: {:?}", std::thread::current().id());
 
     unsafe {
-        let handler = &mut *(user_data as *mut PlaybackHandler);
-        println!("handler: {:?}", handler);
+        let state = &mut *(user_data as *mut PlaybackState);
+        println!("{state:?}");
         //TODO: Handle spurious errors about enqueing during reset
         // Options:
         // Treat it as the sign to stop early (i.e a rude form of communication)
@@ -695,7 +733,7 @@ extern "C" fn handle_buffer(
         // ... but what if we got asked to stop half way through reading a file? Hmm.
         // Do we want this to happen here... or inside the handler...
         // ... and what about synchronous pre-buffering?
-        if let Err(error) = handler.enqueue_next_buffer(audio_queue, buffer) {
+        if let Err(error) = enqueue_next_buffer(state, audio_queue, buffer) {
             //TODO: Handle error properly, send back to main thread somehow?
             println!("oh no: {error}");
         }
