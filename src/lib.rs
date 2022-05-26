@@ -109,7 +109,7 @@ pub fn play(path: &str) -> PlaybackResult<()> {
     println!("Main thread id: {:?}", std::thread::current().id());
 
     let playback_file = audio_file_open(path)?;
-    let audio_metadata = audio_file_read_properties(playback_file)?;
+    let audio_metadata = audio_file_read_metadata(playback_file)?;
     let buffer_config = calculate_buffer_configuration(playback_file)?;
 
     //TODO: Would it be ok for the handler to live on the stack here..
@@ -140,7 +140,6 @@ pub fn play(path: &str) -> PlaybackResult<()> {
             "p" => {
                 toggle_pause(&mut currently_playing)?;
             }
-            //FIXME: This is super dodgey, remove once done fiddling
             _ => {}
         }
     }
@@ -236,7 +235,14 @@ fn begin_playback(
     // Pre load buffers with audio
     // For small files, this might result only some of the buffers being enqueued.
     for buffer_ref in buffers {
-        enqueue_next_buffer(&mut state, output_queue, buffer_ref)?;
+        // To keep the buffer filling logic simple and consistent, we use
+        // `handle_buffer` to fill and enqueue the buffers on this thread.
+        // This re-uses the the behaviour and state management invoked by the audio
+        // queue callback thread when it needs a new buffer. However, this also
+        // means that any error is reported as if it was encountered on the callback
+        // thread. Therefore errors are not returned from `handle_buffer`, but are
+        // instead fed back via the playback state.
+        handle_buffer(state_ptr, output_queue, buffer_ref);
     }
 
     audio_queue_start(output_queue)?;
@@ -257,54 +263,40 @@ struct PlaybackState {
     finished: bool,
 }
 
+// TODO: Should always we ask for more packets than buffer can hold to ensure
+// the buffer gets fully used?
+//
+// We could calculate the max packets per buffer instead of minimum? I.e
+// optimistic instead of pessamistic.
+//
+// This would possibly take advantage of the properties AudioFileReadPacketData
+// has over AudioFileReadPackets?
+//
+// We would still need an upper limit (and overallocate) the
+// packet_descriptions.
+//
+// Is there somehow we could test this by detecting underutilized buffers?
+// The queue could continue to callback with remaining buffers.
+// Avoid unnecessary attempts to read the file again.
+
+//TODO: Handle spurious errors about enqueing during reset
+// Options:
+// Treat it as the sign to stop early (i.e a rude form of communication)
+// Have the other thread warn us not to try, but this would be a race condition
+// (i.e if it stopped the queue after checking the flag and before enqueing)
+// The other is to actually handle the stopping on this thread...
+// (i.e the other thread asks us to stop)
+// ... but what if we got asked to stop half way through reading a file? Hmm.
+// Do we want this to happen here... or inside the handler...
+// ... and what about synchronous pre-buffering?
+//
+
+//TODO: Handle errors properly, send back to main thread somehow?
+
 // This handler assumes `buffer` adheres to several invarients:
 // - Are at least `packets_per_buffer` big
 // - Were allocated with packet descriptions
 // - Belong to `audio_queue`
-fn enqueue_next_buffer(
-    state: &mut PlaybackState,
-    audio_queue: AudioQueueRef,
-    buffer: AudioQueueBufferRef,
-) -> PlaybackResult<bool> {
-    // TODO: Should always we ask for more packets than buffer can hold to ensure
-    // the buffer gets fully used?
-    //
-    // We could calculate the max packets per buffer instead of minimum? I.e
-    // optimistic instead of pessamistic.
-    //
-    // This would possibly take advantage of the properties AudioFileReadPacketData
-    // has over AudioFileReadPackets?
-    //
-    // We would still need an upper limit (and overallocate) the
-    // packet_descriptions.
-    //
-    // Is there somehow we could test this by detecting underutilized buffers?
-
-    // The queue could continue to callback with remaining buffers.
-    // Avoid unnecessary attempts to read the file again.
-    if state.finished {
-        println!("ignoring request to fill buffer");
-        return Ok(true);
-    }
-
-    let packets_read = (state.reader)(
-        state.playback_file,
-        state.current_packet,
-        state.packets_per_buffer,
-        buffer,
-    )?;
-
-    if packets_read == 0 {
-        state.finished = true;
-        return Ok(true);
-    }
-
-    audio_queue_enqueue_buffer(audio_queue, buffer)?;
-
-    state.current_packet += packets_read as i64;
-    Ok(false)
-}
-
 extern "C" fn handle_buffer(
     user_data: *mut c_void,
     audio_queue: AudioQueueRef,
@@ -315,20 +307,41 @@ extern "C" fn handle_buffer(
     unsafe {
         let state = &mut *(user_data as *mut PlaybackState);
         println!("{state:?}");
-        //TODO: Handle spurious errors about enqueing during reset
-        // Options:
-        // Treat it as the sign to stop early (i.e a rude form of communication)
-        // Have the other thread warn us not to try, but this would be a race condition
-        // (i.e if it stopped the queue after checking the flag and before enqueing)
-        // The other is to actually handle the stopping on this thread...
-        // (i.e the other thread asks us to stop)
-        // ... but what if we got asked to stop half way through reading a file? Hmm.
-        // Do we want this to happen here... or inside the handler...
-        // ... and what about synchronous pre-buffering?
-        if let Err(error) = enqueue_next_buffer(state, audio_queue, buffer) {
-            //TODO: Handle error properly, send back to main thread somehow?
-            println!("oh no: {error}");
+
+        if state.finished {
+            println!("ignoring request to fill buffer");
+            return;
         }
+
+        let read_result = (state.reader)(
+            state.playback_file,
+            state.current_packet,
+            state.packets_per_buffer,
+            buffer,
+        );
+
+        let packets_read = match read_result {
+            Ok(packets_read) => packets_read,
+            Err(error) => {
+                println!("oh no: {error}");
+                state.finished = true;
+                return;
+            }
+        };
+
+        if packets_read == 0 {
+            state.finished = true;
+            return;
+        }
+
+        let enqueue_result = audio_queue_enqueue_buffer(audio_queue, buffer);
+        if let Err(error) = enqueue_result {
+            println!("oh no: {error}");
+            state.finished = true;
+            return;
+        }
+
+        state.current_packet += packets_read as i64;
     }
 }
 
@@ -491,7 +504,7 @@ fn audio_file_close(file: AudioFileID) -> PlaybackResult<()> {
     Ok(())
 }
 
-fn audio_file_read_properties(
+fn audio_file_read_metadata(
     file: AudioFileID,
 ) -> PlaybackResult<impl Iterator<Item = (String, String)>> {
     unsafe {
