@@ -1,4 +1,4 @@
-use afqueue::{play, PlaybackError};
+use afqueue::play;
 use std::{env, process};
 
 /// Playback a list of files passed in via command line arguments

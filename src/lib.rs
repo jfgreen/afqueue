@@ -111,20 +111,39 @@ pub fn play(path: &str) -> PlaybackResult<()> {
     let playback_file = audio_file_open(path)?;
     let audio_metadata = audio_file_read_metadata(playback_file)?;
     let buffer_config = calculate_buffer_configuration(playback_file)?;
+    let playback_state = build_playback_state(playback_file, &buffer_config);
+    let playback_state = Box::new(playback_state);
+    let state_ptr = Box::into_raw(playback_state) as *mut c_void;
+    let output_queue = output_queue_create(&buffer_config.format, state_ptr)?;
+    let buffers = create_buffers(output_queue, &buffer_config)?;
 
-    //TODO: Would it be ok for the handler to live on the stack here..
-    //...even if it is used in another thread?
+    if let Some(cookie) = audio_file_read_magic_cookie(playback_file)? {
+        audio_queue_set_magic_cookie(output_queue, cookie)?
+    }
 
-    //TODO: How can we model passing ownership of the handler to the queue?
+    // Pre load buffers with audio
+    // For small files, this might result only some of the buffers being enqueued.
+    for buffer_ref in buffers {
+        // To keep the buffer filling logic simple and consistent, we use
+        // `handle_buffer` to fill and enqueue the buffers on this thread.
+        // This re-uses the the behaviour and state management invoked by the audio
+        // queue callback thread when it needs a new buffer. However, this also
+        // means that any error is reported as if it was encountered on the callback
+        // thread. Therefore errors are not returned from `handle_buffer`, but are
+        // instead fed back via the playback state.
+        handle_buffer(state_ptr, output_queue, buffer_ref);
+    }
 
     println!("Properties:");
     for (k, v) in audio_metadata {
         println!("{k}: {v}");
     }
 
+    audio_queue_start(output_queue)?;
+
     println!("{buffer_config:?}");
 
-    let mut currently_playing = begin_playback(playback_file, buffer_config)?;
+    let mut paused = false;
 
     //FIXME: Create real controls
     loop {
@@ -132,39 +151,28 @@ pub fn play(path: &str) -> PlaybackResult<()> {
         std::io::stdin().read_line(&mut input).unwrap();
         match input.trim().to_lowercase().as_str() {
             "q" => {
-                stop_playback(&mut currently_playing)?;
+                audio_queue_stop(output_queue, true)?;
+                audio_queue_dispose(output_queue, true)?;
                 audio_file_close(playback_file)?;
                 println!("exiting");
                 break;
             }
             "p" => {
-                toggle_pause(&mut currently_playing)?;
+                if paused {
+                    audio_queue_start(output_queue)?;
+                } else {
+                    audio_queue_pause(output_queue)?;
+                }
+                paused = !paused;
             }
             _ => {}
         }
     }
 
-    Ok(())
-}
+    // Rebox the state so it gets dropped
+    // TODO: Test this works
+    let _state = unsafe { Box::from_raw(state_ptr) };
 
-struct PlayingFile {
-    output_queue: AudioQueueRef,
-    state: Box<PlaybackState>,
-    paused: bool,
-}
-
-fn stop_playback(playing: &mut PlayingFile) -> PlaybackResult<()> {
-    audio_queue_stop(playing.output_queue, true)?;
-    audio_queue_dispose(playing.output_queue, true)
-}
-
-fn toggle_pause(playing: &mut PlayingFile) -> PlaybackResult<()> {
-    if playing.paused {
-        audio_queue_start(playing.output_queue)?;
-    } else {
-        audio_queue_pause(playing.output_queue)?;
-    }
-    playing.paused = !playing.paused;
     Ok(())
 }
 
@@ -199,59 +207,23 @@ fn calculate_buffer_configuration(audio_file: AudioFileID) -> PlaybackResult<Buf
     })
 }
 
-fn begin_playback(
+fn build_playback_state(
     audio_file: AudioFileID,
-    buffer_config: BufferConfiguration,
-) -> PlaybackResult<PlayingFile> {
+    buffer_config: &BufferConfiguration,
+) -> PlaybackState {
     let reader = if buffer_config.is_vbr {
         audio_file_read_vbr_packet_data
     } else {
         audio_file_read_cbr_packet_data
     };
 
-    // Use box to provide memory location that outlives this method call
-    let mut state = Box::new(PlaybackState {
+    PlaybackState {
         playback_file: audio_file,
         packets_per_buffer: buffer_config.packets_per_buffer,
         reader,
         current_packet: 0,
         finished: false,
-    });
-
-    let packet_descs = match buffer_config.is_vbr {
-        true => buffer_config.packets_per_buffer,
-        false => 0,
-    };
-
-    let state_ptr = &mut *state as *mut _ as *mut c_void;
-    let output_queue = output_queue_create(&buffer_config.format, state_ptr)?;
-    let buffers = create_buffers(output_queue, buffer_config.buffer_size, packet_descs)?;
-
-    if let Some(cookie) = audio_file_read_magic_cookie(audio_file)? {
-        println!("Magic cookie is {} bytes", cookie.len());
-        audio_queue_set_magic_cookie(output_queue, cookie)?;
     }
-
-    // Pre load buffers with audio
-    // For small files, this might result only some of the buffers being enqueued.
-    for buffer_ref in buffers {
-        // To keep the buffer filling logic simple and consistent, we use
-        // `handle_buffer` to fill and enqueue the buffers on this thread.
-        // This re-uses the the behaviour and state management invoked by the audio
-        // queue callback thread when it needs a new buffer. However, this also
-        // means that any error is reported as if it was encountered on the callback
-        // thread. Therefore errors are not returned from `handle_buffer`, but are
-        // instead fed back via the playback state.
-        handle_buffer(state_ptr, output_queue, buffer_ref);
-    }
-
-    audio_queue_start(output_queue)?;
-
-    Ok(PlayingFile {
-        output_queue,
-        state,
-        paused: false,
-    })
 }
 
 #[derive(Debug)]
@@ -362,9 +334,13 @@ fn calculate_buffer_size(format: &sys::AudioStreamBasicDescription, max_packet_s
 
 fn create_buffers(
     output_queue: AudioQueueRef,
-    buffer_size: u32,
-    packet_descriptions: PacketCount,
+    buffer_config: &BufferConfiguration,
 ) -> PlaybackResult<Vec<AudioQueueBufferRef>> {
+    let packet_descriptions = match buffer_config.is_vbr {
+        true => buffer_config.packets_per_buffer,
+        false => 0,
+    };
+
     unsafe {
         vec![MaybeUninit::uninit(); BUFFER_COUNT]
             .into_iter()
@@ -372,7 +348,7 @@ fn create_buffers(
             .map(|mut buffer_ref| {
                 let status = sys::audio_queue_allocate_buffer_with_packet_descriptions(
                     output_queue,
-                    buffer_size,
+                    buffer_config.buffer_size,
                     packet_descriptions,
                     buffer_ref.as_mut_ptr(),
                 );
