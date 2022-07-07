@@ -2,6 +2,10 @@
 //!
 //! Built on top of the macOS AudioToolbox framework.
 
+// TODO: How do we make sure this code isnt leaky over time?
+// TODO: Use kAudioFilePropertyFormatList to deal with multi format files?
+// TODO: Query the files channel layout to handle multi channel files?
+
 #![feature(extern_types)]
 
 use std::cmp;
@@ -9,6 +13,8 @@ use std::ffi::{c_void, CString, NulError};
 use std::fmt;
 use std::mem::{self, MaybeUninit};
 use std::ptr;
+use std::sync::mpsc::{self, Sender};
+use std::thread::{self, JoinHandle};
 
 mod system;
 
@@ -101,11 +107,14 @@ impl fmt::Display for PlaybackError {
     }
 }
 
-// TODO: How do we make sure this code isnt leaky over time?
-// TODO: Use kAudioFilePropertyFormatList to deal with multi format files?
-// TODO: Query the files channel layout to handle multi channel files?
+enum ControlEvent {
+    PauseToggle,
+    Exit,
+}
 
 pub fn play(path: &str) -> PlaybackResult<()> {
+    let (events_tx, events_rx) = mpsc::channel();
+    let user_input_handler = launch_user_input_handler(events_tx.clone());
     println!("Main thread id: {:?}", std::thread::current().id());
 
     let playback_file = audio_file_open(path)?;
@@ -121,16 +130,13 @@ pub fn play(path: &str) -> PlaybackResult<()> {
         audio_queue_set_magic_cookie(output_queue, cookie)?
     }
 
-    // Pre load buffers with audio
-    // For small files, this might result only some of the buffers being enqueued.
+    // While handle_buffer is usually invoked from the callback thread to refill a
+    // buffer, we call it a few times before starting to pre load the buffers with
+    // audio. This means that any error during pre-buffering is not directly
+    // surfaced here, but reported back as if it was encountered on the callback
+    // thread.
     for buffer_ref in buffers {
-        // To keep the buffer filling logic simple and consistent, we use
-        // `handle_buffer` to fill and enqueue the buffers on this thread.
-        // This re-uses the the behaviour and state management invoked by the audio
-        // queue callback thread when it needs a new buffer. However, this also
-        // means that any error is reported as if it was encountered on the callback
-        // thread. Therefore errors are not returned from `handle_buffer`, but are
-        // instead fed back via the playback state.
+        // For small files, some buffers might remain unused.
         handle_buffer(state_ptr, output_queue, buffer_ref);
     }
 
@@ -145,19 +151,13 @@ pub fn play(path: &str) -> PlaybackResult<()> {
 
     let mut paused = false;
 
-    //FIXME: Create real controls
     loop {
-        let mut input = String::new();
-        std::io::stdin().read_line(&mut input).unwrap();
-        match input.trim().to_lowercase().as_str() {
-            "q" => {
-                audio_queue_stop(output_queue, true)?;
-                audio_queue_dispose(output_queue, true)?;
-                audio_file_close(playback_file)?;
-                println!("exiting");
-                break;
-            }
-            "p" => {
+        let event = events_rx
+            .recv()
+            .expect("Failed to read event: channel unexpectedly closed");
+
+        match event {
+            ControlEvent::PauseToggle => {
                 if paused {
                     audio_queue_start(output_queue)?;
                 } else {
@@ -165,15 +165,53 @@ pub fn play(path: &str) -> PlaybackResult<()> {
                 }
                 paused = !paused;
             }
-            _ => {}
+            ControlEvent::Exit => {
+                audio_queue_stop(output_queue, true)?;
+                audio_queue_dispose(output_queue, true)?;
+                //TODO: Confirm that no callabacks survive past this point
+                audio_file_close(playback_file)?;
+                break;
+            }
         }
     }
+
+    user_input_handler
+        .join()
+        .expect("Panic in input handling thread");
 
     // Rebox the state so it gets dropped
     // TODO: Test this works
     let _state = unsafe { Box::from_raw(state_ptr) };
 
     Ok(())
+}
+
+fn launch_user_input_handler(events_tx: Sender<ControlEvent>) -> JoinHandle<()> {
+    thread::spawn(move || {
+        //TODO: Implement raw terminal IO
+        let send = |e| {
+            events_tx
+                .send(e)
+                .expect("Failed to send event: channel unexpectedly closed")
+        };
+
+        let mut input = String::new();
+
+        loop {
+            input.clear();
+            std::io::stdin().read_line(&mut input).unwrap();
+            match input.trim().to_lowercase().as_str() {
+                "q" => {
+                    send(ControlEvent::Exit);
+                    break;
+                }
+                "p" => {
+                    send(ControlEvent::PauseToggle);
+                }
+                _ => {}
+            }
+        }
+    })
 }
 
 #[derive(Debug)]
@@ -261,7 +299,9 @@ struct PlaybackState {
 // ... but what if we got asked to stop half way through reading a file? Hmm.
 // Do we want this to happen here... or inside the handler...
 // ... and what about synchronous pre-buffering?
-//
+
+//TODO: report back when each buffer is out of rotation... then deallocate once
+// all have exited
 
 //TODO: Handle errors properly, send back to main thread somehow?
 
