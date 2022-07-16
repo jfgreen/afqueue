@@ -84,6 +84,14 @@ pub const AUDIO_FILE_PROPERTY_PACKET_SIZE_UPPER_BOUND: u32 = u32::from_be_bytes(
 /// The value of this property is represented by a pointer.
 pub const AUDIO_QUEUE_PROPERTY_MAGIC_COOKIE_DATA: u32 = u32::from_be_bytes(*b"aqmc");
 
+/// Constant used to query an audio queue to determine if it is running.
+///
+/// This constant can be used to access a read only audio queue property
+/// indicating if an audio queue is running.
+///
+/// The value of this property is represented by `u32`.
+pub const AUDIO_QUEUE_PROPERTY_IS_RUNNING: u32 = u32::from_be_bytes(*b"aqrn");
+
 /// A reference to an opaque type representing an audio queue object.
 ///
 /// An audio queue enables recording and playback of audio in macOS.
@@ -285,6 +293,24 @@ pub struct AudioTimeStamp {
     /// Pads the structure out to force an even 8 byte alignment.
     reserved: u32,
 }
+
+/// Callback invoked whenever a specified audio queue property changes.
+////
+/// This type defines a callback function for listening to changes to an audio
+/// queue property.
+///
+/// The `in_aq` parameter specifies which audio queue invoked the callback,
+/// and the `in_id` parameter will indicate which property has changed.
+///
+/// Callbacks can be registed via `audio_queue_add_property_listener`.
+///
+/// Custom data that was asccoated with the callback upon its creation is made
+/// available in the via the `in_user_data` parameter.
+pub type AudioQueuePropertyListenerProc = unsafe extern "C" fn(
+    in_user_data: *mut c_void,
+    in_aq: AudioQueueRef,
+    in_id: AudioQueuePropertyID,
+);
 
 #[link(name = "AudioToolbox", kind = "framework")]
 extern "C" {
@@ -569,6 +595,45 @@ extern "C" {
     /// Returns an error on failure.
     #[link_name = "AudioQueuePause"]
     pub fn audio_queue_pause(in_aq: AudioQueueRef) -> OSStatus;
+
+    /// Add a listener for an audio queue property.
+    ///
+    /// Create a new callback that is invoked when the `in_id` audio queue
+    /// property on `in_aq` audio queue changes.
+    ///
+    /// The `in_proc` parameter specifcies the function to be called on change.
+    /// Any value supplied to `in_user_data` will be passed to the callback when
+    /// invoked. Returns an error on failure.
+    #[link_name = "AudioQueueAddPropertyListener"]
+    pub fn audio_queue_add_property_listener(
+        in_aq: AudioQueueRef,
+        in_id: AudioQueuePropertyID,
+        in_proc: AudioQueuePropertyListenerProc,
+        in_user_data: *mut c_void,
+    ) -> OSStatus;
+
+    /// Read an audio queue property
+    ///
+    /// Obtain the value of the property specified by `in_id` from the audio
+    /// queue `in_aq`.
+    ///
+    /// On calling this function, the `io_data_size` parameter should be used to
+    /// indicate the maximum number of bytes the caller expects to recieve. On
+    /// return `out_data` will point to the requested property value, and
+    /// `io_data_size` will indicate the size of the value.
+    ///
+    /// Some audio queue properties will be C types where as others will be Core
+    /// Foundation objects. If you read a core foundation object you are then
+    /// responsible for releasing it.
+    ///
+    /// Returns an error on failure.
+    #[link_name = "AudioQueueGetProperty"]
+    pub fn audio_queue_get_property(
+        in_aq: AudioQueueRef,
+        in_id: AudioQueuePropertyID,
+        out_data: *mut c_void,
+        io_data_size: *mut u32,
+    ) -> OSStatus;
 }
 
 /// A reference to an opaque CFURL object.

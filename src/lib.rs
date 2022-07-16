@@ -2,6 +2,8 @@
 //!
 //! Built on top of the macOS AudioToolbox framework.
 
+//TODO: Diagram of how the different threads interact...
+
 // TODO: How do we make sure this code isnt leaky over time?
 // TODO: Use kAudioFilePropertyFormatList to deal with multi format files?
 // TODO: Query the files channel layout to handle multi channel files?
@@ -18,7 +20,7 @@ use std::thread::{self, JoinHandle};
 
 mod system;
 
-use system::{self as sys, AudioFileID, AudioQueueBufferRef, AudioQueueRef};
+use system::{self as sys, AudioFileID, AudioQueueBufferRef, AudioQueuePropertyID, AudioQueueRef};
 
 const LOWER_BUFFER_SIZE_HINT: u32 = 0x4000;
 const UPPER_BUFFER_SIZE_HINT: u32 = 0x50000;
@@ -47,6 +49,8 @@ pub enum PlaybackError {
     FailedToDisposeAudioQueue(SystemErrorCode),
     FailedToReadFromAudioFile(SystemErrorCode),
     FailedToEnqueueBuffer(SystemErrorCode),
+    FailedToAddPropertyListener(SystemErrorCode),
+    FailedToReadQueueProperty(SystemErrorCode),
 }
 
 impl From<NulError> for PlaybackError {
@@ -55,6 +59,9 @@ impl From<NulError> for PlaybackError {
     }
 }
 
+//TODO: Think about which of these are
+// Possible by bad input
+// Only triggered by a bad implementation
 impl fmt::Display for PlaybackError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
@@ -103,28 +110,40 @@ impl fmt::Display for PlaybackError {
             PlaybackError::FailedToEnqueueBuffer(code) => {
                 write!(f, "Failed to enqueue buffer, error: {}", code)
             }
+            PlaybackError::FailedToAddPropertyListener(code) => {
+                write!(f, "Failed to add property listener, error: {}", code)
+            }
+            PlaybackError::FailedToReadQueueProperty(code) => {
+                write!(f, "Failed to read queue property, error: {}", code)
+            }
         }
     }
 }
 
-enum ControlEvent {
-    PauseToggle,
-    Exit,
+enum Event {
+    PauseKeyPressed,
+    ExitKeyPressed,
+    AudioQueueStopped,
 }
 
 pub fn play(path: &str) -> PlaybackResult<()> {
     let (events_tx, events_rx) = mpsc::channel();
     let user_input_handler = launch_user_input_handler(events_tx.clone());
-    println!("Main thread id: {:?}", std::thread::current().id());
 
+    //TODO: Double check the safety of sharing pointer to box to FFI thread
+    // i.e ensure compiler wont helpfully free it too soon
     let playback_file = audio_file_open(path)?;
     let audio_metadata = audio_file_read_metadata(playback_file)?;
     let buffer_config = calculate_buffer_configuration(playback_file)?;
-    let playback_state = build_playback_state(playback_file, &buffer_config);
+    let playback_state = build_playback_state(playback_file, &buffer_config, events_tx.clone());
     let playback_state = Box::new(playback_state);
     let state_ptr = Box::into_raw(playback_state) as *mut c_void;
     let output_queue = output_queue_create(&buffer_config.format, state_ptr)?;
     let buffers = create_buffers(output_queue, &buffer_config)?;
+
+    let state_listener_events_tx = Box::new(events_tx.clone());
+    let state_listener_events_tx = Box::into_raw(state_listener_events_tx);
+    audio_queue_listen_to_run_state(output_queue, state_listener_events_tx)?;
 
     if let Some(cookie) = audio_file_read_magic_cookie(playback_file)? {
         audio_queue_set_magic_cookie(output_queue, cookie)?
@@ -151,13 +170,15 @@ pub fn play(path: &str) -> PlaybackResult<()> {
 
     let mut paused = false;
 
+    //TODO: Would life just be easier if we returned an error
+    //TODO: When we have finished playing... how to tell UIThread to stop?
     loop {
         let event = events_rx
             .recv()
             .expect("Failed to read event: channel unexpectedly closed");
 
         match event {
-            ControlEvent::PauseToggle => {
+            Event::PauseKeyPressed => {
                 if paused {
                     audio_queue_start(output_queue)?;
                 } else {
@@ -165,28 +186,33 @@ pub fn play(path: &str) -> PlaybackResult<()> {
                 }
                 paused = !paused;
             }
-            ControlEvent::Exit => {
-                audio_queue_stop(output_queue, true)?;
+            Event::AudioQueueStopped => {
+                println!("disposing");
                 audio_queue_dispose(output_queue, true)?;
-                //TODO: Confirm that no callabacks survive past this point
+                println!("closing");
                 audio_file_close(playback_file)?;
                 break;
+            }
+            Event::ExitKeyPressed => {
+                audio_queue_stop(output_queue, true)?;
             }
         }
     }
 
-    user_input_handler
-        .join()
-        .expect("Panic in input handling thread");
+    //println!("joining");
+    //user_input_handler
+    //    .join()
+    //    .expect("Panic in input handling thread");
 
     // Rebox the state so it gets dropped
     // TODO: Test this works
     let _state = unsafe { Box::from_raw(state_ptr) };
+    let _listener_tx = unsafe { Box::from_raw(state_listener_events_tx) };
 
     Ok(())
 }
 
-fn launch_user_input_handler(events_tx: Sender<ControlEvent>) -> JoinHandle<()> {
+fn launch_user_input_handler(events_tx: Sender<Event>) -> JoinHandle<()> {
     thread::spawn(move || {
         //TODO: Implement raw terminal IO
         let send = |e| {
@@ -202,11 +228,11 @@ fn launch_user_input_handler(events_tx: Sender<ControlEvent>) -> JoinHandle<()> 
             std::io::stdin().read_line(&mut input).unwrap();
             match input.trim().to_lowercase().as_str() {
                 "q" => {
-                    send(ControlEvent::Exit);
+                    send(Event::ExitKeyPressed);
                     break;
                 }
                 "p" => {
-                    send(ControlEvent::PauseToggle);
+                    send(Event::PauseKeyPressed);
                 }
                 _ => {}
             }
@@ -245,9 +271,11 @@ fn calculate_buffer_configuration(audio_file: AudioFileID) -> PlaybackResult<Buf
     })
 }
 
+//TODO: Is this adding much value?
 fn build_playback_state(
     audio_file: AudioFileID,
     buffer_config: &BufferConfiguration,
+    events: Sender<Event>,
 ) -> PlaybackState {
     let reader = if buffer_config.is_vbr {
         audio_file_read_vbr_packet_data
@@ -256,6 +284,7 @@ fn build_playback_state(
     };
 
     PlaybackState {
+        events,
         playback_file: audio_file,
         packets_per_buffer: buffer_config.packets_per_buffer,
         reader,
@@ -266,6 +295,7 @@ fn build_playback_state(
 
 #[derive(Debug)]
 struct PlaybackState {
+    events: Sender<Event>,
     playback_file: AudioFileID,
     reader: AudioFileReader,
     packets_per_buffer: PacketCount,
@@ -289,19 +319,7 @@ struct PlaybackState {
 // The queue could continue to callback with remaining buffers.
 // Avoid unnecessary attempts to read the file again.
 
-//TODO: Handle spurious errors about enqueing during reset
-// Options:
-// Treat it as the sign to stop early (i.e a rude form of communication)
-// Have the other thread warn us not to try, but this would be a race condition
-// (i.e if it stopped the queue after checking the flag and before enqueing)
-// The other is to actually handle the stopping on this thread...
-// (i.e the other thread asks us to stop)
-// ... but what if we got asked to stop half way through reading a file? Hmm.
-// Do we want this to happen here... or inside the handler...
-// ... and what about synchronous pre-buffering?
-
-//TODO: report back when each buffer is out of rotation... then deallocate once
-// all have exited
+//TODO: Handle spurious errors when queue is stopped but callbacks haven't
 
 //TODO: Handle errors properly, send back to main thread somehow?
 
@@ -314,8 +332,6 @@ extern "C" fn handle_buffer(
     audio_queue: AudioQueueRef,
     buffer: AudioQueueBufferRef,
 ) {
-    println!("Callback thread id: {:?}", std::thread::current().id());
-
     unsafe {
         let state = &mut *(user_data as *mut PlaybackState);
         println!("{state:?}");
@@ -333,6 +349,7 @@ extern "C" fn handle_buffer(
         );
 
         let packets_read = match read_result {
+            //TODO: Report error properly
             Ok(packets_read) => packets_read,
             Err(error) => {
                 println!("oh no: {error}");
@@ -343,17 +360,45 @@ extern "C" fn handle_buffer(
 
         if packets_read == 0 {
             state.finished = true;
+            println!("end of file");
+            // Request an asynchronous stop so that buffered audio can finish playing.
+            // Queue stopping is detected via seperate callback to property listener.
+            //TODO: Handle Error
+            audio_queue_stop(audio_queue, false);
             return;
         }
 
         let enqueue_result = audio_queue_enqueue_buffer(audio_queue, buffer);
         if let Err(error) = enqueue_result {
+            //TODO: Report error properly
             println!("oh no: {error}");
             state.finished = true;
             return;
         }
 
         state.current_packet += packets_read as i64;
+    }
+}
+
+extern "C" fn handle_running_state_change(
+    user_data: *mut c_void,
+    audio_queue: AudioQueueRef,
+    property: AudioQueuePropertyID,
+) {
+    assert!(property == sys::AUDIO_QUEUE_PROPERTY_IS_RUNNING);
+    unsafe {
+        let events_tx = &mut *(user_data as *mut Sender<Event>);
+
+        match audio_queue_read_run_state(audio_queue) {
+            Ok(0) => {
+                (events_tx)
+                    .send(Event::AudioQueueStopped)
+                    .expect("Failed to send event: channel unexpectedly closed");
+            }
+            Ok(_) => {} // Ignore the queue starting
+            //TODO: Feed back error to controller
+            Err(error) => println!("booooo!"),
+        }
     }
 }
 
@@ -489,7 +534,7 @@ fn audio_file_open(path: &str) -> PlaybackResult<AudioFileID> {
             false, // Not a directory
         );
 
-        // Create file
+        // Open file
         let mut file_id = MaybeUninit::uninit();
         let status = sys::audio_file_open_url(
             url_ref,
@@ -553,38 +598,40 @@ fn audio_file_read_metadata(
 fn audio_file_read_basic_description(
     file: AudioFileID,
 ) -> PlaybackResult<sys::AudioStreamBasicDescription> {
-    unsafe { audio_file_get_property(file, sys::AUDIO_FILE_PROPERTY_DATA_FORMAT) }
+    audio_file_get_property(file, sys::AUDIO_FILE_PROPERTY_DATA_FORMAT)
 }
 
 fn audio_file_read_packet_size_upper_bound(file: AudioFileID) -> PlaybackResult<u32> {
-    unsafe { audio_file_get_property(file, sys::AUDIO_FILE_PROPERTY_PACKET_SIZE_UPPER_BOUND) }
+    audio_file_get_property(file, sys::AUDIO_FILE_PROPERTY_PACKET_SIZE_UPPER_BOUND)
 }
 
 // This only works with sized types
-unsafe fn audio_file_get_property<T>(
+fn audio_file_get_property<T>(
     file_id: sys::AudioFileID,
     property: sys::AudioFilePropertyID,
 ) -> PlaybackResult<T> {
-    let mut data = MaybeUninit::<T>::uninit();
-    let mut data_size = mem::size_of::<T>() as u32;
+    unsafe {
+        let mut data = MaybeUninit::<T>::uninit();
+        let mut data_size = mem::size_of::<T>() as u32;
 
-    let status = sys::audio_file_get_property(
-        file_id,
-        property,
-        &mut data_size as *mut _,
-        data.as_mut_ptr() as *mut c_void,
-    );
-    let data = data.assume_init();
+        let status = sys::audio_file_get_property(
+            file_id,
+            property,
+            &mut data_size as *mut _,
+            data.as_mut_ptr() as *mut c_void,
+        );
+        let data = data.assume_init();
 
-    if status != 0 {
-        return Err(PlaybackError::FailedToReadFileProperty(status));
+        if status != 0 {
+            return Err(PlaybackError::FailedToReadFileProperty(status));
+        }
+
+        // audio_file_get_property outputs the number of bytes written to data_size
+        // Check to see if this is correct for the given type
+        assert!(data_size == mem::size_of::<T>() as u32);
+
+        Ok(data)
     }
-
-    // audio_file_get_property outputs the number of bytes written to data_size
-    // Check to see if this is correct for the given type
-    assert!(data_size == mem::size_of::<T>() as u32);
-
-    Ok(data)
 }
 
 fn audio_file_read_magic_cookie(file: AudioFileID) -> PlaybackResult<Option<Vec<u8>>> {
@@ -736,6 +783,51 @@ fn audio_queue_enqueue_buffer(
         } else {
             Err(PlaybackError::FailedToEnqueueBuffer(status))
         }
+    }
+}
+
+fn audio_queue_listen_to_run_state(
+    queue: AudioQueueRef,
+    events_tx: *const Sender<Event>,
+) -> PlaybackResult<()> {
+    unsafe {
+        let status = sys::audio_queue_add_property_listener(
+            queue,
+            sys::AUDIO_QUEUE_PROPERTY_IS_RUNNING,
+            handle_running_state_change,
+            events_tx as *mut c_void,
+        );
+        if status == 0 {
+            Ok(())
+        } else {
+            Err(PlaybackError::FailedToAddPropertyListener(status))
+        }
+    }
+}
+
+fn audio_queue_read_run_state(queue: AudioQueueRef) -> PlaybackResult<u32> {
+    unsafe {
+        let mut data = MaybeUninit::<u32>::uninit();
+        let mut data_size = mem::size_of::<u32>() as u32;
+
+        let status = sys::audio_queue_get_property(
+            queue,
+            sys::AUDIO_QUEUE_PROPERTY_IS_RUNNING,
+            data.as_mut_ptr() as *mut c_void,
+            &mut data_size as *mut _,
+        );
+
+        let data = data.assume_init();
+
+        if status != 0 {
+            return Err(PlaybackError::FailedToReadQueueProperty(status));
+        }
+
+        // audio_queue_get_property outputs the number of bytes written to data_size
+        // Check to see if this is correct
+        assert!(data_size == mem::size_of::<u32>() as u32);
+
+        Ok(data)
     }
 }
 
