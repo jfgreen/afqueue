@@ -5,14 +5,19 @@
 //! naming and type aliasing conventions to those found in the macOS SDK header
 //! files.
 
-use std::ffi::c_void;
+// Note: Core foundation uses a `Boolean` type which is typedef as `unsigned
+// char`. These bindings work on the assumption that a Rust `bool` is ABI
+// compatable with this heratage Carbon era type.
 
-//TODO: Consider if we want to explicity alias type Boolean = u8;
+use std::ffi::c_void;
 
 /// A type free reference to an opaque Core Foundation object.
 ///
 /// This type is accepted by polymorphic functions like `cf_release`.
 pub type CFTypeRef = *const c_void;
+
+/// Unique identifer of a Core Foundation opaque type.
+pub type CFTypeID = usize;
 
 /// A reference to a CFAllocator object.
 ///
@@ -76,6 +81,9 @@ pub const AUDIO_FILE_PROPERTY_MAGIC_COOKIE_DATA: u32 = u32::from_be_bytes(*b"mgi
 /// The value of this property is represented as a u32.
 pub const AUDIO_FILE_PROPERTY_PACKET_SIZE_UPPER_BOUND: u32 = u32::from_be_bytes(*b"pkub");
 
+/// Error returned when trying to access an unsupported audio file property
+pub const AUDIO_FILE_ERROR_UNSUPPORTED_PROPERTY: i32 = i32::from_be_bytes(*b"pty?");
+
 /// Constant used to interact with an audio queues cookie data.
 ///
 /// If an audio format requires a magic cookie, then this property must be set
@@ -91,6 +99,10 @@ pub const AUDIO_QUEUE_PROPERTY_MAGIC_COOKIE_DATA: u32 = u32::from_be_bytes(*b"aq
 ///
 /// The value of this property is represented by `u32`.
 pub const AUDIO_QUEUE_PROPERTY_IS_RUNNING: u32 = u32::from_be_bytes(*b"aqrn");
+
+/// Error returned when trying to enqueue on an audio queue that is resetting,
+/// stopping, or being disposed.
+pub const AUDIO_QUEUE_ERROR_ENQUEUE_DURING_RESET: i32 = -66632;
 
 /// A reference to an opaque type representing an audio queue object.
 ///
@@ -419,10 +431,9 @@ extern "C" {
     ///
     /// To enable caching of the data upon read, set `in_use_cache` to true.
     ///
-    /// This function will return `AUDIO_FILE_END_OF_FILE_ERROR` when the end of
-    /// the file is encountered. In this situation the `io_num_packets` and
-    /// `io_num_bytes` parameters will reflect if this resulted less data being
-    /// read.
+    /// When this function encounters the end of a file, the `io_num_packets`
+    /// and `io_num_bytes` parameters will reflect if this resulted less data
+    /// being read.
     #[link_name = "AudioFileReadPacketData"]
     pub fn audio_file_read_packet_data(
         in_audio_file: AudioFileID,
@@ -767,6 +778,10 @@ extern "C" {
         used_buf_len: *mut CFIndex,
     ) -> CFIndex;
 
+    /// Get the unique identifer for the CFString type
+    #[link_name = "CFStringGetTypeID"]
+    pub fn cfstring_get_type_id() -> CFTypeID;
+
     /// Creates a new Core Foundation URL (CFURL) from the systems "native"
     /// string representation.
     ///
@@ -815,4 +830,10 @@ extern "C" {
     /// initially set to one.
     #[link_name = "CFRelease"]
     pub fn cf_release(cf: CFTypeRef);
+
+    /// Get a unique identifier indicating the type of any Core Foundation
+    /// object.
+    #[link_name = "CFGetTypeID"]
+    pub fn cf_get_type_id(cf: CFTypeRef) -> CFTypeID;
+
 }
