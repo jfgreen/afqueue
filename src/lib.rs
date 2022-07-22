@@ -7,6 +7,7 @@
 // TODO: How do we make sure this code isnt leaky over time?
 // TODO: Use kAudioFilePropertyFormatList to deal with multi format files?
 // TODO: Query the files channel layout to handle multi channel files?
+// TODO: Check we dont orphan threads from one file to the next.
 
 #![feature(extern_types)]
 
@@ -30,7 +31,7 @@ const BUFFER_COUNT: usize = 3;
 type PacketPosition = i64;
 type PacketCount = u32;
 
-type PlaybackResult<T> = Result<T, PlaybackError>;
+type PlaybackResult = Result<(), PlaybackError>;
 
 #[derive(Debug)]
 pub struct SystemErrorCode(i32);
@@ -44,15 +45,13 @@ impl fmt::Display for SystemErrorCode {
 
 #[derive(Debug)]
 pub enum PlaybackError {
-    //TODO: Introduce "path error" abstraction?
-    PathContainsInteriorNull(NulError),
-    PathIsEmpty,
+    PathError(PathError),
     SystemError(SystemErrorCode),
 }
 
-impl From<NulError> for PlaybackError {
-    fn from(err: NulError) -> PlaybackError {
-        PlaybackError::PathContainsInteriorNull(err)
+impl From<PathError> for PlaybackError {
+    fn from(err: PathError) -> PlaybackError {
+        PlaybackError::PathError(err)
     }
 }
 
@@ -66,14 +65,36 @@ impl From<SystemErrorCode> for PlaybackError {
 impl fmt::Display for PlaybackError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
-            PlaybackError::PathContainsInteriorNull(err) => {
-                write!(f, "Path contained a null: {}", err)
-            }
-            PlaybackError::PathIsEmpty => {
-                write!(f, "Attempted to interpret an empty string as a path")
+            PlaybackError::PathError(err) => {
+                write!(f, "Supplied string is not a valid path: {}", err)
             }
             PlaybackError::SystemError(SystemErrorCode(code)) => {
                 write!(f, "System error, code: '{}'", code)
+            }
+        }
+    }
+}
+
+#[derive(Debug)]
+pub enum PathError {
+    InteriorNull(NulError),
+    PathIsEmpty,
+}
+
+impl From<NulError> for PathError {
+    fn from(err: NulError) -> PathError {
+        PathError::InteriorNull(err)
+    }
+}
+
+impl fmt::Display for PathError {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            PathError::InteriorNull(err) => {
+                write!(f, "Path contained a null: {}", err)
+            }
+            PathError::PathIsEmpty => {
+                write!(f, "Attempted to interpret an empty string as a path")
             }
         }
     }
@@ -87,7 +108,12 @@ enum Event {
     AudioQueueStopped,
 }
 
-pub fn play(path: &str) -> PlaybackResult<()> {
+pub fn start(paths: impl IntoIterator<Item = String>) -> PlaybackResult {
+    let path = paths.into_iter().next().unwrap();
+    play(&path)
+}
+
+fn play(path: &str) -> PlaybackResult {
     let (events_tx, events_rx) = mpsc::channel();
     let user_input_handler = launch_user_input_handler(events_tx.clone());
 
@@ -365,7 +391,7 @@ extern "C" fn handle_running_state_change(
             }
             Ok(_) => {} // Ignore the queue starting
             //TODO: Feed back error to controller
-            Err(error) => println!("booooo!"),
+            Err(error) => println!("booooo!: {error}"),
         }
     }
 }
@@ -486,9 +512,9 @@ fn audio_file_read_cbr_packet_data(
     }
 }
 
-fn cstring_path(path: &str) -> PlaybackResult<CString> {
+fn cstring_path(path: &str) -> Result<CString, PathError> {
     if path.is_empty() {
-        return Err(PlaybackError::PathIsEmpty);
+        return Err(PathError::PathIsEmpty);
     }
 
     Ok(CString::new(path)?)
@@ -561,7 +587,7 @@ fn audio_file_read_metadata(file: AudioFileID) -> SystemResult<Vec<(String, Stri
         let properties = keys
             .into_iter()
             .zip(values.into_iter())
-            .filter(|(k, v)| sys::cf_get_type_id(*v as *const c_void) == cfstring_type_id)
+            .filter(|(_, v)| sys::cf_get_type_id(*v as *const c_void) == cfstring_type_id)
             .map(|(k, v)| (cfstring_to_string(k), cfstring_to_string(v)))
             .collect();
 
