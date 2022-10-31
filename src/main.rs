@@ -5,7 +5,6 @@ use std::{env, process};
 fn main() {
     let args = env::args();
     let audio_file_paths = parse_args(args);
-    //TODO: Change to str
     afqueue::start(audio_file_paths).unwrap_or_else(|err| {
         println!("Failed to playback files");
         println!("{}", err);

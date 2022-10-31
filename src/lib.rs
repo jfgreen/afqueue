@@ -14,19 +14,22 @@
 use std::cmp;
 use std::ffi::{c_void, CStr, CString, NulError};
 use std::fmt;
+use std::io;
 use std::mem::{self, MaybeUninit};
 use std::ptr;
-use std::sync::mpsc::{self, Sender};
-use std::thread::{self, JoinHandle};
 
 mod system;
 
-use system::{self as sys, AudioFileID, AudioQueueBufferRef, AudioQueuePropertyID, AudioQueueRef};
+use system::{
+    self as sys, AudioFileID, AudioQueueBufferRef, AudioQueuePropertyID, AudioQueueRef, Kqueue,
+};
 
 const LOWER_BUFFER_SIZE_HINT: u32 = 0x4000;
 const UPPER_BUFFER_SIZE_HINT: u32 = 0x50000;
 const BUFFER_SECONDS_HINT: f64 = 0.5;
 const BUFFER_COUNT: usize = 3;
+
+const AUDIO_QUEUE_PLAYBACK_FINISHED: u64 = 42;
 
 type PacketPosition = i64;
 type PacketCount = u32;
@@ -47,6 +50,7 @@ impl fmt::Display for SystemErrorCode {
 pub enum PlaybackError {
     PathError(PathError),
     SystemError(SystemErrorCode),
+    IOError(io::Error),
 }
 
 impl From<PathError> for PlaybackError {
@@ -62,6 +66,12 @@ impl From<SystemErrorCode> for PlaybackError {
     }
 }
 
+impl From<io::Error> for PlaybackError {
+    fn from(err: io::Error) -> PlaybackError {
+        PlaybackError::IOError(err)
+    }
+}
+
 impl fmt::Display for PlaybackError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
@@ -70,6 +80,9 @@ impl fmt::Display for PlaybackError {
             }
             PlaybackError::SystemError(SystemErrorCode(code)) => {
                 write!(f, "System error, code: '{}'", code)
+            }
+            PlaybackError::IOError(err) => {
+                write!(f, "IO error: '{}'", err)
             }
         }
     }
@@ -114,8 +127,8 @@ pub fn start(paths: impl IntoIterator<Item = String>) -> PlaybackResult {
 }
 
 fn play(path: &str) -> PlaybackResult {
-    let (events_tx, events_rx) = mpsc::channel();
-    let user_input_handler = launch_user_input_handler(events_tx.clone());
+    let event_kqueue = build_event_kqueue()?;
+    let mut event_reader = EventReader::new(event_kqueue);
 
     //TODO: Double check the safety of sharing pointer to box to FFI thread
     // i.e ensure compiler wont helpfully free it too soon
@@ -123,15 +136,13 @@ fn play(path: &str) -> PlaybackResult {
     let playback_file = audio_file_open(&playback_path)?;
     let audio_metadata = audio_file_read_metadata(playback_file)?;
     let buffer_config = calculate_buffer_configuration(playback_file)?;
-    let playback_state = build_playback_state(playback_file, &buffer_config, events_tx.clone());
+    let playback_state = build_playback_state(playback_file, &buffer_config, event_kqueue);
     let playback_state = Box::new(playback_state);
     let state_ptr = Box::into_raw(playback_state) as *mut c_void;
     let output_queue = output_queue_create(&buffer_config.format, state_ptr)?;
     let buffers = create_buffers(output_queue, &buffer_config)?;
 
-    let state_listener_events_tx = Box::new(events_tx.clone());
-    let state_listener_events_tx = Box::into_raw(state_listener_events_tx);
-    audio_queue_listen_to_run_state(output_queue, state_listener_events_tx)?;
+    audio_queue_listen_to_run_state(output_queue, event_kqueue)?;
 
     if let Some(cookie) = audio_file_read_magic_cookie(playback_file)? {
         audio_queue_set_magic_cookie(output_queue, cookie)?
@@ -161,9 +172,7 @@ fn play(path: &str) -> PlaybackResult {
     //TODO: Would life just be easier if we returned an error
     //TODO: When we have finished playing... how to tell UIThread to stop?
     loop {
-        let event = events_rx
-            .recv()
-            .expect("Failed to read event: channel unexpectedly closed");
+        let event = event_reader.next();
 
         match event {
             Event::PauseKeyPressed => {
@@ -188,45 +197,238 @@ fn play(path: &str) -> PlaybackResult {
         }
     }
 
-    println!("joining");
-    user_input_handler
-        .join()
-        .expect("Panic in input handling thread");
-
     // Rebox the state so it gets dropped
     // TODO: Test this works
     let _state = unsafe { Box::from_raw(state_ptr) };
-    let _listener_tx = unsafe { Box::from_raw(state_listener_events_tx) };
+
+    //TODO: Close Kqueue?
 
     Ok(())
 }
 
-fn launch_user_input_handler(events_tx: Sender<Event>) -> JoinHandle<()> {
-    thread::spawn(move || {
-        //TODO: Implement raw terminal IO
-        let send = |e| {
-            events_tx
-                .send(e)
-                .expect("Failed to send event: channel unexpectedly closed")
+fn build_event_kqueue() -> Result<Kqueue, io::Error> {
+    unsafe {
+        let kqueue = sys::kqueue();
+        if kqueue < 0 {
+            return Err(io::Error::last_os_error());
+        }
+
+        // TODO: See if EV_ENABLE is actually needed?
+
+        // Describe the stdin events we are interested in
+        let stdin_event = sys::Kevent {
+            ident: sys::STDIN_FILE_NUM as u64,
+            filter: sys::EVFILT_READ,
+            flags: sys::EV_ADD | sys::EV_ENABLE,
+            fflags: 0,
+            data: 0,
+            udata: 0,
         };
 
-        let mut input = String::new();
+        // Describe the playback finished events we are interested in
+        // TODO: Increase confidence in using kqueue from one song to the next by using
+        // udata to signal the audio queue thats stopped
+        let playback_finished_event = sys::Kevent {
+            ident: AUDIO_QUEUE_PLAYBACK_FINISHED,
+            filter: sys::EVFILT_USER,
+            flags: sys::EV_ADD | sys::EV_ONESHOT | sys::EV_ENABLE,
+            fflags: 0,
+            data: 0,
+            udata: 0,
+        };
+
+        let changelist = [stdin_event, playback_finished_event];
+
+        // Register interest in both events
+        let result = sys::kevent(
+            kqueue,
+            changelist.as_ptr(),
+            changelist.len() as i32,
+            ptr::null_mut(),
+            0,
+            ptr::null(),
+        );
+
+        if result < 0 {
+            return Err(io::Error::last_os_error());
+        }
+        Ok(kqueue)
+    }
+}
+
+fn close_kqueue(kqueue: Kqueue) -> Result<(), io::Error> {
+    unsafe {
+        let result = sys::close(kqueue);
+        if result < 0 {
+            Err(io::Error::last_os_error())
+        } else {
+            Ok(())
+        }
+    }
+}
+
+struct EventReader {
+    queue: KQueueReader,
+    input: InputReader,
+}
+
+//TODO: Verify that buffered reading of stdin and kqueue are necessary?
+
+impl EventReader {
+    fn new(event_kqueue: Kqueue) -> Self {
+        EventReader {
+            queue: KQueueReader::new(event_kqueue),
+            input: InputReader::new(sys::STDIN_FILE_NUM),
+        }
+    }
+
+    fn next(&mut self) -> Event {
+        // To get the next event we:
+        // - Start by taking the next buffered char from stdin.
+        // - If this char maps to a valid event then return, otherwise try again from
+        //   the top.
+        // - If nothing buffered on std, instead perform a blocking read on the kqueue.
+        // - If kqueue returns a user event, then return it.
+        // - If the kqueue indicates that stdin has input to read, attempt to fill stdin
+        //   and try again from the top.
 
         loop {
-            input.clear();
-            std::io::stdin().read_line(&mut input).unwrap();
-            match input.trim().to_lowercase().as_str() {
-                "q" => {
-                    send(Event::ExitKeyPressed);
-                    break;
+            //TODO: Can we remove has_buffered from both?
+            //TODO: Can this logic be simplified?
+
+            if let Some(next_char) = self.input.read() {
+                println!("Read '{next_char}' from input");
+                match next_char {
+                    'q' => return Event::ExitKeyPressed,
+                    'p' => return Event::PauseKeyPressed,
+                    _ => continue,
                 }
-                "p" => {
-                    send(Event::PauseKeyPressed);
+            } else {
+                let event = self.queue.read();
+
+                match event {
+                    sys::Kevent {
+                        //TODO: Fix this pattern match
+                        //ident: sys::STDIN_FILE_NUM as u64,
+                        ident: 0,
+                        filter: sys::EVFILT_READ,
+                        ..
+                    } => {
+                        self.input.fill();
+                        continue;
+                    }
+                    sys::Kevent {
+                        ident: AUDIO_QUEUE_PLAYBACK_FINISHED,
+                        filter: sys::EVFILT_USER,
+                        ..
+                    } => {
+                        return Event::AudioQueueStopped;
+                    }
+                    _ => {
+                        println!("Got unknown event");
+                        continue;
+                    }
                 }
-                _ => {}
             }
         }
-    })
+    }
+}
+
+const EVENT_BUFFER_SIZE: usize = 10;
+const INPUT_BUFFER_SIZE: usize = 10;
+
+struct InputReader {
+    buffer: [u8; INPUT_BUFFER_SIZE],
+    next: usize,
+    filled: usize,
+    file_descriptor: i32,
+}
+
+impl InputReader {
+    fn new(file_descriptor: i32) -> Self {
+        InputReader {
+            buffer: [0; INPUT_BUFFER_SIZE],
+            next: 0,
+            filled: 0,
+            file_descriptor,
+        }
+    }
+
+    fn fill(&mut self) {
+        unsafe {
+            //NOTE:
+            // CTRL-D sends pending console input, even if input is empty.
+            // This isnt acurately reflected in the data field of the kevent,
+            // which reports there is a byte to read.
+
+            let result = sys::read(
+                self.file_descriptor,
+                self.buffer.as_mut_ptr() as *mut c_void,
+                self.buffer.len(),
+            );
+
+            if result < 0 {
+                panic!("{}", io::Error::last_os_error());
+            }
+
+            self.next = 0;
+            self.filled = result as usize;
+        }
+    }
+
+    //TODO: Is returning u8 what we want?
+    fn read(&mut self) -> Option<char> {
+        if self.next == self.filled {
+            return None;
+        }
+        let next_char = self.buffer[self.next] as char;
+        self.next += 1;
+        Some(next_char)
+    }
+}
+
+struct KQueueReader {
+    buffer: [sys::Kevent; EVENT_BUFFER_SIZE],
+    kqueue: Kqueue,
+    next: usize,
+    filled: usize,
+}
+
+impl KQueueReader {
+    fn new(kqueue: Kqueue) -> Self {
+        KQueueReader {
+            kqueue,
+            buffer: [sys::Kevent::default(); EVENT_BUFFER_SIZE],
+            next: 0,
+            filled: 0,
+        }
+    }
+
+    //TODO: Confirm that this blocks
+    fn read(&mut self) -> sys::Kevent {
+        unsafe {
+            if self.next == self.filled {
+                let result = sys::kevent(
+                    self.kqueue,
+                    ptr::null(),
+                    0,
+                    self.buffer.as_mut_ptr(),
+                    self.buffer.len() as i32,
+                    ptr::null(),
+                );
+
+                if result < 0 {
+                    panic!("{}", io::Error::last_os_error());
+                }
+
+                self.next = 0;
+                self.filled = result as usize;
+            }
+            let item = self.buffer[self.next];
+            self.next += 1;
+            item
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -264,7 +466,7 @@ fn calculate_buffer_configuration(audio_file: AudioFileID) -> SystemResult<Buffe
 fn build_playback_state(
     audio_file: AudioFileID,
     buffer_config: &BufferConfiguration,
-    events: Sender<Event>,
+    event_queue: Kqueue,
 ) -> PlaybackState {
     let reader = if buffer_config.is_vbr {
         audio_file_read_vbr_packet_data
@@ -273,7 +475,7 @@ fn build_playback_state(
     };
 
     PlaybackState {
-        events,
+        event_queue,
         playback_file: audio_file,
         packets_per_buffer: buffer_config.packets_per_buffer,
         reader,
@@ -284,7 +486,7 @@ fn build_playback_state(
 
 #[derive(Debug)]
 struct PlaybackState {
-    events: Sender<Event>,
+    event_queue: Kqueue,
     playback_file: AudioFileID,
     reader: AudioFileReader,
     packets_per_buffer: PacketCount,
@@ -379,15 +581,39 @@ extern "C" fn handle_running_state_change(
     audio_queue: AudioQueueRef,
     property: AudioQueuePropertyID,
 ) {
+    // This handler should only react to changes to the "is running" property
     assert!(property == sys::AUDIO_QUEUE_PROPERTY_IS_RUNNING);
     unsafe {
-        let events_tx = &mut *(user_data as *mut Sender<Event>);
+        let kqueue = user_data as Kqueue;
 
         match audio_queue_read_run_state(audio_queue) {
             Ok(0) => {
-                (events_tx)
-                    .send(Event::AudioQueueStopped)
-                    .expect("Failed to send event: channel unexpectedly closed");
+                //TODO: Extract up this and other deeply nested kqueue stuff into some helper
+                // functions..
+                let playback_finished_event = sys::Kevent {
+                    ident: AUDIO_QUEUE_PLAYBACK_FINISHED,
+                    filter: sys::EVFILT_USER,
+                    flags: 0,
+                    fflags: sys::NOTE_TRIGGER,
+                    data: 0,
+                    udata: 0,
+                };
+
+                let changelist = [playback_finished_event];
+
+                let result = sys::kevent(
+                    kqueue,
+                    changelist.as_ptr(),
+                    changelist.len() as i32,
+                    ptr::null_mut(),
+                    0,
+                    ptr::null(),
+                );
+
+                if result < 0 {
+                    //TODO: Better error messages!
+                    panic!("oopsie: {}", io::Error::last_os_error());
+                }
             }
             Ok(_) => {} // Ignore the queue starting
             //TODO: Feed back error to controller
@@ -788,16 +1014,13 @@ fn audio_queue_enqueue_buffer(
     }
 }
 
-fn audio_queue_listen_to_run_state(
-    queue: AudioQueueRef,
-    events_tx: *const Sender<Event>,
-) -> SystemResult<()> {
+fn audio_queue_listen_to_run_state(queue: AudioQueueRef, kqueue: Kqueue) -> SystemResult<()> {
     unsafe {
         let status = sys::audio_queue_add_property_listener(
             queue,
             sys::AUDIO_QUEUE_PROPERTY_IS_RUNNING,
             handle_running_state_change,
-            events_tx as *mut c_void,
+            kqueue as *mut c_void,
         );
         if status == 0 {
             Ok(())
