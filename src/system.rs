@@ -869,6 +869,8 @@ pub const EVFILT_USER: i16 = -10;
 pub const EV_ADD: u16 = 0x1;
 pub const EV_ENABLE: u16 = 0x4;
 pub const EV_ONESHOT: u16 = 0x10;
+pub const EV_CLEAR: u16 = 0x20;
+pub const EV_DISPATCH: u16 = 0x80;
 pub const NOTE_TRIGGER: u32 = 0x01000000;
 
 pub const STDIN_FILE_NUM: i32 = 0;

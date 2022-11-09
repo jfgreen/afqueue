@@ -2,12 +2,13 @@
 //!
 //! Built on top of the macOS AudioToolbox framework.
 
-// TODO: Diagram of how the different threads interact...
+// TODO: Diagram of how the different moving parts interact...
 
 // TODO: How do we make sure this code isnt leaky over time?
 // TODO: Use kAudioFilePropertyFormatList to deal with multi format files?
 // TODO: Query the files channel layout to handle multi channel files?
 // TODO: Check we dont orphan threads from one file to the next.
+// TODO: Start consolidate things into abstractions
 
 #![feature(extern_types)]
 
@@ -122,14 +123,17 @@ enum Event {
 }
 
 pub fn start(paths: impl IntoIterator<Item = String>) -> PlaybackResult {
-    let path = paths.into_iter().next().unwrap();
-    play(&path)
-}
-
-fn play(path: &str) -> PlaybackResult {
     let event_kqueue = build_event_kqueue()?;
     let mut event_reader = EventReader::new(event_kqueue);
+    //TODO:: Nicer to have a "player" abstraction and to read off events here?
+    for path in paths {
+        play(&path, &mut event_reader, event_kqueue)?;
+    }
+    //TODO: Close Kqueue?
+    Ok(())
+}
 
+fn play(path: &str, event_reader: &mut EventReader, event_kqueue: Kqueue) -> PlaybackResult {
     //TODO: Double check the safety of sharing pointer to box to FFI thread
     // i.e ensure compiler wont helpfully free it too soon
     let playback_path = cstring_path(path)?;
@@ -169,6 +173,8 @@ fn play(path: &str) -> PlaybackResult {
 
     let mut paused = false;
 
+    //TODO: Make 'q' exit completely, and maybe 's' for skip
+
     //TODO: Would life just be easier if we returned an error
     //TODO: When we have finished playing... how to tell UIThread to stop?
     loop {
@@ -197,13 +203,45 @@ fn play(path: &str) -> PlaybackResult {
         }
     }
 
+    // Reset the playback finished event for re-use if there is another file to play
+    enable_playback_finished_event(event_kqueue)?;
+
     // Rebox the state so it gets dropped
     // TODO: Test this works
     let _state = unsafe { Box::from_raw(state_ptr) };
 
-    //TODO: Close Kqueue?
-
     Ok(())
+}
+
+fn enable_playback_finished_event(kqueue: Kqueue) -> Result<(), io::Error> {
+    unsafe {
+        // Re enable the playback finished event
+        let playback_finished_event = sys::Kevent {
+            ident: AUDIO_QUEUE_PLAYBACK_FINISHED,
+            filter: sys::EVFILT_USER,
+            flags: sys::EV_ENABLE,
+            fflags: 0,
+            data: 0,
+            udata: 0,
+        };
+
+        let changelist = [playback_finished_event];
+
+        // Register interest in both events
+        let result = sys::kevent(
+            kqueue,
+            changelist.as_ptr(),
+            changelist.len() as i32,
+            ptr::null_mut(),
+            0,
+            ptr::null(),
+        );
+
+        if result < 0 {
+            return Err(io::Error::last_os_error());
+        }
+        Ok(())
+    }
 }
 
 fn build_event_kqueue() -> Result<Kqueue, io::Error> {
@@ -225,13 +263,17 @@ fn build_event_kqueue() -> Result<Kqueue, io::Error> {
             udata: 0,
         };
 
+        //TODO: Maybe using a unique ident per file along with a EV_ONESHOT would be
+        // easier?
+
         // Describe the playback finished events we are interested in
         // TODO: Increase confidence in using kqueue from one song to the next by using
         // udata to signal the audio queue thats stopped
         let playback_finished_event = sys::Kevent {
             ident: AUDIO_QUEUE_PLAYBACK_FINISHED,
             filter: sys::EVFILT_USER,
-            flags: sys::EV_ADD | sys::EV_ONESHOT | sys::EV_ENABLE,
+            flags: sys::EV_ADD | sys::EV_DISPATCH | sys::EV_CLEAR,
+            //flags: sys::EV_ADD | sys::EV_ONESHOT | sys::EV_ENABLE,
             fflags: 0,
             data: 0,
             udata: 0,
@@ -256,6 +298,7 @@ fn build_event_kqueue() -> Result<Kqueue, io::Error> {
     }
 }
 
+/*
 fn close_kqueue(kqueue: Kqueue) -> Result<(), io::Error> {
     unsafe {
         let result = sys::close(kqueue);
@@ -266,6 +309,7 @@ fn close_kqueue(kqueue: Kqueue) -> Result<(), io::Error> {
         }
     }
 }
+*/
 
 struct EventReader {
     queue: KQueueReader,
