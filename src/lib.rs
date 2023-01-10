@@ -19,11 +19,9 @@ use std::io;
 use std::mem::{self, MaybeUninit};
 use std::ptr;
 
-mod system;
+mod ffi;
 
-use system::{
-    self as sys, AudioFileID, AudioQueueBufferRef, AudioQueuePropertyID, AudioQueueRef, Kqueue,
-};
+use ffi::{AudioFileID, AudioQueueBufferRef, AudioQueuePropertyID, AudioQueueRef, Kqueue};
 
 const LOWER_BUFFER_SIZE_HINT: u32 = 0x4000;
 const UPPER_BUFFER_SIZE_HINT: u32 = 0x50000;
@@ -216,10 +214,10 @@ fn play(path: &str, event_reader: &mut EventReader, event_kqueue: Kqueue) -> Pla
 fn enable_playback_finished_event(kqueue: Kqueue) -> Result<(), io::Error> {
     unsafe {
         // Re enable the playback finished event
-        let playback_finished_event = sys::Kevent {
+        let playback_finished_event = ffi::Kevent {
             ident: AUDIO_QUEUE_PLAYBACK_FINISHED,
-            filter: sys::EVFILT_USER,
-            flags: sys::EV_ENABLE,
+            filter: ffi::EVFILT_USER,
+            flags: ffi::EV_ENABLE,
             fflags: 0,
             data: 0,
             udata: 0,
@@ -228,7 +226,7 @@ fn enable_playback_finished_event(kqueue: Kqueue) -> Result<(), io::Error> {
         let changelist = [playback_finished_event];
 
         // Register interest in both events
-        let result = sys::kevent(
+        let result = ffi::kevent(
             kqueue,
             changelist.as_ptr(),
             changelist.len() as i32,
@@ -246,7 +244,7 @@ fn enable_playback_finished_event(kqueue: Kqueue) -> Result<(), io::Error> {
 
 fn build_event_kqueue() -> Result<Kqueue, io::Error> {
     unsafe {
-        let kqueue = sys::kqueue();
+        let kqueue = ffi::kqueue();
         if kqueue < 0 {
             return Err(io::Error::last_os_error());
         }
@@ -254,10 +252,10 @@ fn build_event_kqueue() -> Result<Kqueue, io::Error> {
         // TODO: See if EV_ENABLE is actually needed?
 
         // Describe the stdin events we are interested in
-        let stdin_event = sys::Kevent {
-            ident: sys::STDIN_FILE_NUM,
-            filter: sys::EVFILT_READ,
-            flags: sys::EV_ADD | sys::EV_ENABLE,
+        let stdin_event = ffi::Kevent {
+            ident: ffi::STDIN_FILE_NUM,
+            filter: ffi::EVFILT_READ,
+            flags: ffi::EV_ADD | ffi::EV_ENABLE,
             fflags: 0,
             data: 0,
             udata: 0,
@@ -269,11 +267,11 @@ fn build_event_kqueue() -> Result<Kqueue, io::Error> {
         // Describe the playback finished events we are interested in
         // TODO: Increase confidence in using kqueue from one song to the next by using
         // udata to signal the audio queue thats stopped
-        let playback_finished_event = sys::Kevent {
+        let playback_finished_event = ffi::Kevent {
             ident: AUDIO_QUEUE_PLAYBACK_FINISHED,
-            filter: sys::EVFILT_USER,
-            flags: sys::EV_ADD | sys::EV_DISPATCH | sys::EV_CLEAR,
-            //flags: sys::EV_ADD | sys::EV_ONESHOT | sys::EV_ENABLE,
+            filter: ffi::EVFILT_USER,
+            flags: ffi::EV_ADD | ffi::EV_DISPATCH | ffi::EV_CLEAR,
+            //flags: ffi::EV_ADD | ffi::EV_ONESHOT | ffi::EV_ENABLE,
             fflags: 0,
             data: 0,
             udata: 0,
@@ -282,7 +280,7 @@ fn build_event_kqueue() -> Result<Kqueue, io::Error> {
         let changelist = [stdin_event, playback_finished_event];
 
         // Register interest in both events
-        let result = sys::kevent(
+        let result = ffi::kevent(
             kqueue,
             changelist.as_ptr(),
             changelist.len() as i32,
@@ -300,7 +298,7 @@ fn build_event_kqueue() -> Result<Kqueue, io::Error> {
 
 fn close_kqueue(kqueue: Kqueue) -> Result<(), io::Error> {
     unsafe {
-        let result = sys::close(kqueue);
+        let result = ffi::close(kqueue);
         if result < 0 {
             Err(io::Error::last_os_error())
         } else {
@@ -318,7 +316,7 @@ impl EventReader {
     fn new(event_kqueue: Kqueue) -> Self {
         EventReader {
             queue: KQueueReader::new(event_kqueue),
-            input: InputReader::new(sys::STDIN_FILE_NUM as i32),
+            input: InputReader::new(ffi::STDIN_FILE_NUM as i32),
         }
     }
 
@@ -344,11 +342,11 @@ impl EventReader {
             let ident_filter = (queue_event.ident, queue_event.filter);
 
             match ident_filter {
-                (sys::STDIN_FILE_NUM, sys::EVFILT_READ) => {
+                (ffi::STDIN_FILE_NUM, ffi::EVFILT_READ) => {
                     self.input.fill_buffer();
                     continue;
                 }
-                (AUDIO_QUEUE_PLAYBACK_FINISHED, sys::EVFILT_USER) => {
+                (AUDIO_QUEUE_PLAYBACK_FINISHED, ffi::EVFILT_USER) => {
                     return Event::AudioQueueStopped
                 }
                 _ => continue,
@@ -383,7 +381,7 @@ impl InputReader {
             // spuriouly trigger. So this wont be guarenteed to read any bytes, even if
             // kqueue has reported there is input to read.
 
-            let result = sys::read(
+            let result = ffi::read(
                 self.file_descriptor,
                 self.buffer.as_mut_ptr() as *mut c_void,
                 self.buffer.len(),
@@ -409,7 +407,7 @@ impl InputReader {
 }
 
 struct KQueueReader {
-    buffer: [sys::Kevent; KEVENT_BUFFER_SIZE],
+    buffer: [ffi::Kevent; KEVENT_BUFFER_SIZE],
     kqueue: Kqueue,
     next: usize,
     filled: usize,
@@ -419,17 +417,17 @@ impl KQueueReader {
     fn new(kqueue: Kqueue) -> Self {
         KQueueReader {
             kqueue,
-            buffer: [sys::Kevent::default(); KEVENT_BUFFER_SIZE],
+            buffer: [ffi::Kevent::default(); KEVENT_BUFFER_SIZE],
             next: 0,
             filled: 0,
         }
     }
 
     //TODO: Confirm that this blocks
-    fn read(&mut self) -> sys::Kevent {
+    fn read(&mut self) -> ffi::Kevent {
         unsafe {
             if self.next == self.filled {
-                let result = sys::kevent(
+                let result = ffi::kevent(
                     self.kqueue,
                     ptr::null(),
                     0,
@@ -454,7 +452,7 @@ impl KQueueReader {
 
 #[derive(Debug)]
 struct BufferConfiguration {
-    format: sys::AudioStreamBasicDescription,
+    format: ffi::AudioStreamBasicDescription,
     buffer_size: u32,
     packets_per_buffer: PacketCount,
     is_vbr: bool,
@@ -584,7 +582,7 @@ extern "C" fn handle_buffer(
             }
             // Attempting to enqueue during reset can be expected when the user
             // has stopped the queue before playback has finished.
-            Err(SystemErrorCode(sys::AUDIO_QUEUE_ERROR_ENQUEUE_DURING_RESET)) => {
+            Err(SystemErrorCode(ffi::AUDIO_QUEUE_ERROR_ENQUEUE_DURING_RESET)) => {
                 state.finished = true;
             }
             // Anything else is probably a legitimate error condition
@@ -603,7 +601,7 @@ extern "C" fn handle_running_state_change(
     property: AudioQueuePropertyID,
 ) {
     // This handler should only react to changes to the "is running" property
-    assert!(property == sys::AUDIO_QUEUE_PROPERTY_IS_RUNNING);
+    assert!(property == ffi::AUDIO_QUEUE_PROPERTY_IS_RUNNING);
     unsafe {
         let kqueue = user_data as Kqueue;
 
@@ -611,18 +609,18 @@ extern "C" fn handle_running_state_change(
             Ok(0) => {
                 //TODO: Extract up this and other deeply nested kqueue stuff into some helper
                 // functions..
-                let playback_finished_event = sys::Kevent {
+                let playback_finished_event = ffi::Kevent {
                     ident: AUDIO_QUEUE_PLAYBACK_FINISHED,
-                    filter: sys::EVFILT_USER,
+                    filter: ffi::EVFILT_USER,
                     flags: 0,
-                    fflags: sys::NOTE_TRIGGER,
+                    fflags: ffi::NOTE_TRIGGER,
                     data: 0,
                     udata: 0,
                 };
 
                 let changelist = [playback_finished_event];
 
-                let result = sys::kevent(
+                let result = ffi::kevent(
                     kqueue,
                     changelist.as_ptr(),
                     changelist.len() as i32,
@@ -643,7 +641,7 @@ extern "C" fn handle_running_state_change(
     }
 }
 
-fn calculate_buffer_size(format: &sys::AudioStreamBasicDescription, max_packet_size: u32) -> u32 {
+fn calculate_buffer_size(format: &ffi::AudioStreamBasicDescription, max_packet_size: u32) -> u32 {
     //TODO: Write some tests for this calculation (if we decide to keep it)
     if format.frames_per_packet != 0 {
         // If frames per packet are known, tailor the buffer size.
@@ -672,7 +670,7 @@ fn create_buffers(
             .into_iter()
             //TODO: Can we allocate buffers _without_ packet descriptions if we dont need them?
             .map(|mut buffer_ref| {
-                let status = sys::audio_queue_allocate_buffer_with_packet_descriptions(
+                let status = ffi::audio_queue_allocate_buffer_with_packet_descriptions(
                     output_queue,
                     buffer_config.buffer_size,
                     packet_descriptions,
@@ -706,7 +704,7 @@ fn audio_file_read_vbr_packet_data(
         let mut num_bytes = buffer.audio_data_bytes_capacity;
         let mut num_packets = packets;
 
-        let status = sys::audio_file_read_packet_data(
+        let status = ffi::audio_file_read_packet_data(
             file,
             false, // dont use caching
             &mut num_bytes,
@@ -738,7 +736,7 @@ fn audio_file_read_cbr_packet_data(
         let mut num_bytes = buffer.audio_data_bytes_capacity;
         let mut num_packets = packets;
 
-        let status = sys::audio_file_read_packet_data(
+        let status = ffi::audio_file_read_packet_data(
             file,
             false, // dont use caching
             &mut num_bytes,
@@ -772,7 +770,7 @@ fn audio_file_open(path: &CStr) -> SystemResult<AudioFileID> {
 
     unsafe {
         // Create URL
-        let url_ref = sys::cfurl_create_from_filesystem_representation(
+        let url_ref = ffi::cfurl_create_from_filesystem_representation(
             ptr::null(), // Use default allocator
             path.as_ptr(),
             path.len() as isize,
@@ -781,15 +779,15 @@ fn audio_file_open(path: &CStr) -> SystemResult<AudioFileID> {
 
         // Open file
         let mut file_id = MaybeUninit::uninit();
-        let status = sys::audio_file_open_url(
+        let status = ffi::audio_file_open_url(
             url_ref,
-            sys::AUDIO_FILE_READ_PERMISSION,
+            ffi::AUDIO_FILE_READ_PERMISSION,
             0, // No file hints
             file_id.as_mut_ptr(),
         );
 
         // Dont need the CFURL anymore
-        sys::cf_release(url_ref as *const c_void);
+        ffi::cf_release(url_ref as *const c_void);
 
         if status != 0 {
             return Err(SystemErrorCode(status));
@@ -802,7 +800,7 @@ fn audio_file_open(path: &CStr) -> SystemResult<AudioFileID> {
 
 fn audio_file_close(file: AudioFileID) -> SystemResult<()> {
     unsafe {
-        let status = sys::audio_file_close(file);
+        let status = ffi::audio_file_close(file);
         if status != 0 {
             return Err(SystemErrorCode(status));
         }
@@ -812,14 +810,14 @@ fn audio_file_close(file: AudioFileID) -> SystemResult<()> {
 
 fn audio_file_read_metadata(file: AudioFileID) -> SystemResult<Vec<(String, String)>> {
     unsafe {
-        let info_dict = audio_file_get_property(file, sys::AUDIO_FILE_PROPERTY_INFO_DICTIONARY)?;
+        let info_dict = audio_file_get_property(file, ffi::AUDIO_FILE_PROPERTY_INFO_DICTIONARY)?;
 
         // Extract keys and values
-        let count = sys::cfdictionary_get_count(info_dict);
-        let mut keys = vec![0 as sys::CFStringRef; count as usize];
-        let mut values = vec![0 as sys::CFStringRef; count as usize];
+        let count = ffi::cfdictionary_get_count(info_dict);
+        let mut keys = vec![0 as ffi::CFStringRef; count as usize];
+        let mut values = vec![0 as ffi::CFStringRef; count as usize];
 
-        sys::cfdictionary_get_keys_and_values(
+        ffi::cfdictionary_get_keys_and_values(
             info_dict,
             keys.as_mut_ptr() as *mut *const c_void,
             values.as_mut_ptr() as *mut *const c_void,
@@ -829,16 +827,16 @@ fn audio_file_read_metadata(file: AudioFileID) -> SystemResult<Vec<(String, Stri
         // Note: We eagerly collect to force conversation before the dictionary is
         // released
 
-        let cfstring_type_id = sys::cfstring_get_type_id();
+        let cfstring_type_id = ffi::cfstring_get_type_id();
 
         let properties = keys
             .into_iter()
             .zip(values.into_iter())
-            .filter(|(_, v)| sys::cf_get_type_id(*v as *const c_void) == cfstring_type_id)
+            .filter(|(_, v)| ffi::cf_get_type_id(*v as *const c_void) == cfstring_type_id)
             .map(|(k, v)| (cfstring_to_string(k), cfstring_to_string(v)))
             .collect();
 
-        sys::cf_release(info_dict as *const c_void);
+        ffi::cf_release(info_dict as *const c_void);
 
         Ok(properties)
     }
@@ -846,24 +844,24 @@ fn audio_file_read_metadata(file: AudioFileID) -> SystemResult<Vec<(String, Stri
 
 fn audio_file_read_basic_description(
     file: AudioFileID,
-) -> SystemResult<sys::AudioStreamBasicDescription> {
-    audio_file_get_property(file, sys::AUDIO_FILE_PROPERTY_DATA_FORMAT)
+) -> SystemResult<ffi::AudioStreamBasicDescription> {
+    audio_file_get_property(file, ffi::AUDIO_FILE_PROPERTY_DATA_FORMAT)
 }
 
 fn audio_file_read_packet_size_upper_bound(file: AudioFileID) -> SystemResult<u32> {
-    audio_file_get_property(file, sys::AUDIO_FILE_PROPERTY_PACKET_SIZE_UPPER_BOUND)
+    audio_file_get_property(file, ffi::AUDIO_FILE_PROPERTY_PACKET_SIZE_UPPER_BOUND)
 }
 
 // This only works with sized types
 fn audio_file_get_property<T>(
-    file_id: sys::AudioFileID,
-    property: sys::AudioFilePropertyID,
+    file_id: ffi::AudioFileID,
+    property: ffi::AudioFilePropertyID,
 ) -> SystemResult<T> {
     unsafe {
         let mut data = MaybeUninit::<T>::uninit();
         let mut data_size = mem::size_of::<T>() as u32;
 
-        let status = sys::audio_file_get_property(
+        let status = ffi::audio_file_get_property(
             file_id,
             property,
             &mut data_size as *mut _,
@@ -888,15 +886,15 @@ fn audio_file_read_magic_cookie(file: AudioFileID) -> SystemResult<Option<Vec<u8
         // Check to see if there is a cookie, and if so how large it is.
         let mut cookie_size: u32 = 0;
         let mut is_writable: u32 = 0;
-        let status = sys::audio_file_get_property_info(
+        let status = ffi::audio_file_get_property_info(
             file,
-            sys::AUDIO_FILE_PROPERTY_MAGIC_COOKIE_DATA,
+            ffi::AUDIO_FILE_PROPERTY_MAGIC_COOKIE_DATA,
             &mut cookie_size as *mut _,
             &mut is_writable as *mut _,
         );
 
         // No magic cookie data
-        if status == sys::AUDIO_FILE_ERROR_UNSUPPORTED_PROPERTY {
+        if status == ffi::AUDIO_FILE_ERROR_UNSUPPORTED_PROPERTY {
             return Ok(None);
         }
 
@@ -909,9 +907,9 @@ fn audio_file_read_magic_cookie(file: AudioFileID) -> SystemResult<Option<Vec<u8
         let mut cookie_data: Vec<u8> = vec![0; cookie_size as usize];
         let mut data_size = cookie_size;
 
-        let status = sys::audio_file_get_property(
+        let status = ffi::audio_file_get_property(
             file,
-            sys::AUDIO_FILE_PROPERTY_MAGIC_COOKIE_DATA,
+            ffi::AUDIO_FILE_PROPERTY_MAGIC_COOKIE_DATA,
             &mut data_size as *mut _,
             cookie_data.as_mut_ptr() as *mut c_void,
         );
@@ -926,12 +924,12 @@ fn audio_file_read_magic_cookie(file: AudioFileID) -> SystemResult<Option<Vec<u8
 }
 
 fn output_queue_create(
-    format: *const sys::AudioStreamBasicDescription,
+    format: *const ffi::AudioStreamBasicDescription,
     user_data: *mut c_void,
 ) -> SystemResult<AudioQueueRef> {
     unsafe {
         let mut output_queue = MaybeUninit::uninit();
-        let status = sys::audio_queue_new_output(
+        let status = ffi::audio_queue_new_output(
             format,
             handle_buffer,
             user_data,
@@ -951,9 +949,9 @@ fn output_queue_create(
 
 fn audio_queue_set_magic_cookie(queue: AudioQueueRef, cookie: Vec<u8>) -> SystemResult<()> {
     unsafe {
-        let status = sys::audio_queue_set_property(
+        let status = ffi::audio_queue_set_property(
             queue,
-            system::AUDIO_QUEUE_PROPERTY_MAGIC_COOKIE_DATA,
+            ffi::AUDIO_QUEUE_PROPERTY_MAGIC_COOKIE_DATA,
             cookie.as_ptr() as *const c_void,
             cookie.len() as u32,
         );
@@ -968,7 +966,7 @@ fn audio_queue_set_magic_cookie(queue: AudioQueueRef, cookie: Vec<u8>) -> System
 
 fn audio_queue_start(queue: AudioQueueRef) -> SystemResult<()> {
     unsafe {
-        let status = sys::audio_queue_start(queue, ptr::null());
+        let status = ffi::audio_queue_start(queue, ptr::null());
 
         if status == 0 {
             Ok(())
@@ -980,7 +978,7 @@ fn audio_queue_start(queue: AudioQueueRef) -> SystemResult<()> {
 
 fn audio_queue_stop(queue: AudioQueueRef, immediate: bool) -> SystemResult<()> {
     unsafe {
-        let status = sys::audio_queue_stop(queue, immediate);
+        let status = ffi::audio_queue_stop(queue, immediate);
 
         if status == 0 {
             Ok(())
@@ -992,7 +990,7 @@ fn audio_queue_stop(queue: AudioQueueRef, immediate: bool) -> SystemResult<()> {
 
 fn audio_queue_dispose(queue: AudioQueueRef, immediate: bool) -> SystemResult<()> {
     unsafe {
-        let status = sys::audio_queue_dispose(queue, immediate);
+        let status = ffi::audio_queue_dispose(queue, immediate);
 
         if status == 0 {
             Ok(())
@@ -1004,7 +1002,7 @@ fn audio_queue_dispose(queue: AudioQueueRef, immediate: bool) -> SystemResult<()
 
 fn audio_queue_pause(queue: AudioQueueRef) -> SystemResult<()> {
     unsafe {
-        let status = sys::audio_queue_pause(queue);
+        let status = ffi::audio_queue_pause(queue);
 
         if status == 0 {
             Ok(())
@@ -1019,7 +1017,7 @@ fn audio_queue_enqueue_buffer(
     buffer: AudioQueueBufferRef,
 ) -> SystemResult<()> {
     unsafe {
-        let status = sys::audio_queue_enqueue_buffer(
+        let status = ffi::audio_queue_enqueue_buffer(
             queue,
             buffer,
             // Packet descriptions are supplied via buffer itself
@@ -1037,9 +1035,9 @@ fn audio_queue_enqueue_buffer(
 
 fn audio_queue_listen_to_run_state(queue: AudioQueueRef, kqueue: Kqueue) -> SystemResult<()> {
     unsafe {
-        let status = sys::audio_queue_add_property_listener(
+        let status = ffi::audio_queue_add_property_listener(
             queue,
-            sys::AUDIO_QUEUE_PROPERTY_IS_RUNNING,
+            ffi::AUDIO_QUEUE_PROPERTY_IS_RUNNING,
             handle_running_state_change,
             kqueue as *mut c_void,
         );
@@ -1056,9 +1054,9 @@ fn audio_queue_read_run_state(queue: AudioQueueRef) -> SystemResult<u32> {
         let mut data = MaybeUninit::<u32>::uninit();
         let mut data_size = mem::size_of::<u32>() as u32;
 
-        let status = sys::audio_queue_get_property(
+        let status = ffi::audio_queue_get_property(
             queue,
-            sys::AUDIO_QUEUE_PROPERTY_IS_RUNNING,
+            ffi::AUDIO_QUEUE_PROPERTY_IS_RUNNING,
             data.as_mut_ptr() as *mut c_void,
             &mut data_size as *mut _,
         );
@@ -1077,20 +1075,20 @@ fn audio_queue_read_run_state(queue: AudioQueueRef) -> SystemResult<u32> {
     }
 }
 
-unsafe fn cfstring_to_string(cfstring: sys::CFStringRef) -> String {
+unsafe fn cfstring_to_string(cfstring: ffi::CFStringRef) -> String {
     assert!(!cfstring.is_null());
 
-    let string_len = sys::cfstring_get_length(cfstring);
+    let string_len = ffi::cfstring_get_length(cfstring);
 
     // This is effectively asking how big a buffer we are going to need
     let mut bytes_required = 0;
-    sys::cfstring_get_bytes(
+    ffi::cfstring_get_bytes(
         cfstring,
-        sys::CFRange {
+        ffi::CFRange {
             location: 0,
             length: string_len,
         },
-        sys::CFSTRING_ENCODING_UTF8,
+        ffi::CFSTRING_ENCODING_UTF8,
         0,               // no loss byte
         false,           // no byte order marker
         ptr::null_mut(), // dont actually capture any bytes
@@ -1102,17 +1100,17 @@ unsafe fn cfstring_to_string(cfstring: sys::CFStringRef) -> String {
     let mut buffer = vec![b'\x00'; bytes_required as usize];
     let mut bytes_written = 0;
 
-    let chars_converted = sys::cfstring_get_bytes(
+    let chars_converted = ffi::cfstring_get_bytes(
         cfstring,
-        sys::CFRange {
+        ffi::CFRange {
             location: 0,
             length: string_len,
         },
-        sys::CFSTRING_ENCODING_UTF8,
+        ffi::CFSTRING_ENCODING_UTF8,
         0,     // no loss byte
         false, // no byte order marker
         buffer.as_mut_ptr(),
-        buffer.len() as sys::CFIndex,
+        buffer.len() as ffi::CFIndex,
         &mut bytes_written,
     );
 
