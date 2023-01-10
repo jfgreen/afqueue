@@ -733,7 +733,7 @@ extern "C" {
         values: *mut *const c_void,
     );
 
-    /// Get the length of a string in the  UTF-16 code units.
+    /// Get the length of a string in UTF-16 code units.
     ///
     /// For example:
     ///  - "tree" -> 4
@@ -873,7 +873,7 @@ pub const EV_CLEAR: u16 = 0x20;
 pub const EV_DISPATCH: u16 = 0x80;
 pub const NOTE_TRIGGER: u32 = 0x01000000;
 
-pub const STDIN_FILE_NUM: i32 = 0;
+pub const STDIN_FILE_NUM: u64 = 0;
 
 #[derive(Debug)]
 #[repr(C)]

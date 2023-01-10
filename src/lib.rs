@@ -129,7 +129,7 @@ pub fn start(paths: impl IntoIterator<Item = String>) -> PlaybackResult {
     for path in paths {
         play(&path, &mut event_reader, event_kqueue)?;
     }
-    //TODO: Close Kqueue?
+    close_kqueue(event_kqueue)?;
     Ok(())
 }
 
@@ -255,7 +255,7 @@ fn build_event_kqueue() -> Result<Kqueue, io::Error> {
 
         // Describe the stdin events we are interested in
         let stdin_event = sys::Kevent {
-            ident: sys::STDIN_FILE_NUM as u64,
+            ident: sys::STDIN_FILE_NUM,
             filter: sys::EVFILT_READ,
             flags: sys::EV_ADD | sys::EV_ENABLE,
             fflags: 0,
@@ -263,7 +263,7 @@ fn build_event_kqueue() -> Result<Kqueue, io::Error> {
             udata: 0,
         };
 
-        //TODO: Maybe using a unique ident per file along with a EV_ONESHOT would be
+        // TODO: Maybe using a unique ident per file along with a EV_ONESHOT would be
         // easier?
 
         // Describe the playback finished events we are interested in
@@ -298,7 +298,6 @@ fn build_event_kqueue() -> Result<Kqueue, io::Error> {
     }
 }
 
-/*
 fn close_kqueue(kqueue: Kqueue) -> Result<(), io::Error> {
     unsafe {
         let result = sys::close(kqueue);
@@ -309,76 +308,56 @@ fn close_kqueue(kqueue: Kqueue) -> Result<(), io::Error> {
         }
     }
 }
-*/
 
 struct EventReader {
     queue: KQueueReader,
     input: InputReader,
 }
 
-//TODO: Verify that buffered reading of stdin and kqueue are necessary?
-
 impl EventReader {
     fn new(event_kqueue: Kqueue) -> Self {
         EventReader {
             queue: KQueueReader::new(event_kqueue),
-            input: InputReader::new(sys::STDIN_FILE_NUM),
+            input: InputReader::new(sys::STDIN_FILE_NUM as i32),
         }
     }
 
     fn next(&mut self) -> Event {
         // To get the next event we:
         // - Start by taking the next buffered char from stdin.
-        // - If this char maps to a valid event then return, otherwise try again from
-        //   the top.
+        // - If this char maps to a valid event then return, otherwise try again.
         // - If nothing buffered on std, instead perform a blocking read on the kqueue.
         // - If kqueue returns a user event, then return it.
         // - If the kqueue indicates that stdin has input to read, attempt to fill stdin
         //   and try again from the top.
 
         loop {
-            //TODO: Can we remove has_buffered from both?
-            //TODO: Can this logic be simplified?
-
-            if let Some(next_char) = self.input.read() {
-                println!("Read '{next_char}' from input");
-                match next_char {
+            if let Some(input_char) = self.input.read() {
+                match input_char {
                     'q' => return Event::ExitKeyPressed,
                     'p' => return Event::PauseKeyPressed,
                     _ => continue,
                 }
-            } else {
-                let event = self.queue.read();
+            }
 
-                match event {
-                    sys::Kevent {
-                        //TODO: Fix this pattern match
-                        //ident: sys::STDIN_FILE_NUM as u64,
-                        ident: 0,
-                        filter: sys::EVFILT_READ,
-                        ..
-                    } => {
-                        self.input.fill();
-                        continue;
-                    }
-                    sys::Kevent {
-                        ident: AUDIO_QUEUE_PLAYBACK_FINISHED,
-                        filter: sys::EVFILT_USER,
-                        ..
-                    } => {
-                        return Event::AudioQueueStopped;
-                    }
-                    _ => {
-                        println!("Got unknown event");
-                        continue;
-                    }
+            let queue_event = self.queue.read();
+            let ident_filter = (queue_event.ident, queue_event.filter);
+
+            match ident_filter {
+                (sys::STDIN_FILE_NUM, sys::EVFILT_READ) => {
+                    self.input.fill_buffer();
+                    continue;
                 }
+                (AUDIO_QUEUE_PLAYBACK_FINISHED, sys::EVFILT_USER) => {
+                    return Event::AudioQueueStopped
+                }
+                _ => continue,
             }
         }
     }
 }
 
-const EVENT_BUFFER_SIZE: usize = 10;
+const KEVENT_BUFFER_SIZE: usize = 10;
 const INPUT_BUFFER_SIZE: usize = 10;
 
 struct InputReader {
@@ -398,12 +377,11 @@ impl InputReader {
         }
     }
 
-    fn fill(&mut self) {
+    fn fill_buffer(&mut self) {
         unsafe {
-            //NOTE:
-            // CTRL-D sends pending console input, even if input is empty.
-            // This isnt acurately reflected in the data field of the kevent,
-            // which reports there is a byte to read.
+            // NOTE: It's possible that the kqueue filter watching standard input might
+            // spuriouly trigger. So this wont be guarenteed to read any bytes, even if
+            // kqueue has reported there is input to read.
 
             let result = sys::read(
                 self.file_descriptor,
@@ -420,7 +398,6 @@ impl InputReader {
         }
     }
 
-    //TODO: Is returning u8 what we want?
     fn read(&mut self) -> Option<char> {
         if self.next == self.filled {
             return None;
@@ -432,7 +409,7 @@ impl InputReader {
 }
 
 struct KQueueReader {
-    buffer: [sys::Kevent; EVENT_BUFFER_SIZE],
+    buffer: [sys::Kevent; KEVENT_BUFFER_SIZE],
     kqueue: Kqueue,
     next: usize,
     filled: usize,
@@ -442,7 +419,7 @@ impl KQueueReader {
     fn new(kqueue: Kqueue) -> Self {
         KQueueReader {
             kqueue,
-            buffer: [sys::Kevent::default(); EVENT_BUFFER_SIZE],
+            buffer: [sys::Kevent::default(); KEVENT_BUFFER_SIZE],
             next: 0,
             filled: 0,
         }
