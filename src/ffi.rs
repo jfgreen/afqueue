@@ -2,6 +2,7 @@
 //! - AudioToolbox: For playing back audio files
 //! - CoreFoundation: For supporting interaction with AudioToolbox
 //! - Kqueue / libC: For a basic event loop and handling stdio
+//! - Termios: For raw terminal I/O
 //!
 //! To facilitate cross referencing with macOS API documentation,
 //! types that cross the FFI boundary generally follow similar
@@ -862,6 +863,11 @@ extern "C" {
     pub fn read(descriptor: i32, buffer: *mut c_void, count: usize) -> isize;
 
     pub fn close(descriptor: i32) -> i32;
+
+    //TODO: Split up ffi into modules based on kind of thing
+
+    pub fn tcgetattr(descriptor: i32, termios: *mut Termios) -> i32;
+    pub fn tcsetattr(descriptor: i32, optional_actions: i32, termios: *const Termios) -> i32;
 }
 
 pub const EVFILT_READ: i16 = -1;
@@ -898,3 +904,58 @@ pub struct Kevent {
     /// Opaque user data identifier
     pub udata: u64,
 }
+
+//TODO: Document termios stuff
+
+pub type TCFlag = u64;
+pub type CC = u8;
+pub type Speed = u8;
+
+/// Size of the `c_cc` control chars array.
+pub const NCCS: usize = 20;
+
+#[repr(C)]
+#[derive(Copy, Clone, Default, Debug)]
+pub struct Termios {
+    /// input flags
+    pub c_iflag: TCFlag,
+    /// output flags
+    pub c_oflag: TCFlag,
+    /// control flags
+    pub c_cflag: TCFlag,
+    /// local flags
+    pub c_lflag: TCFlag,
+    /// control chars
+    pub c_cc: [CC; NCCS],
+    /// input speed
+    pub c_ispeed: Speed,
+    /// output speed
+    pub c_ospeed: Speed,
+}
+
+/// Enable echoing
+pub const ECHO: TCFlag = 0x00000008;
+
+/// Canonicalize input lines (edit and submit input line by line)
+pub const ICANON: TCFlag = 0x00000100;
+
+/// Translate interupt, quit and suspend characters into corresponding signals
+pub const ISIG: TCFlag = 0x00000080;
+
+/// Enable output flow control
+pub const IXON: TCFlag = 0x00000200;
+
+/// Enable extended input procesing
+pub const IEXTEN: TCFlag = 0x00000400;
+
+/// Enable translation of carriage returns to newlines
+pub const ICRNL: TCFlag = 0x00000100;
+
+/// Enable output post processing
+pub const OPOST: TCFlag = 0x00000001;
+
+/// Enable sending SIGINT on break
+pub const BRKINT: TCFlag = 0x00000002;
+
+/// /*D*/rain output, flush input
+pub const TCSAFLUSH: i32 = 2;

@@ -121,13 +121,25 @@ enum Event {
 }
 
 pub fn start(paths: impl IntoIterator<Item = String>) -> PlaybackResult {
+    let mut termios = read_current_termios();
+    let original_termios = termios;
+    enable_raw_mode(&mut termios);
+
+    set_termios(&termios);
+
     let event_kqueue = build_event_kqueue()?;
     let mut event_reader = EventReader::new(event_kqueue);
     //TODO:: Nicer to have a "player" abstraction and to read off events here?
     for path in paths {
+        print!("\x1b[2J"); // Clear screen
+        print!("\x1b[1;1H"); // Position cursor at the top left
         play(&path, &mut event_reader, event_kqueue)?;
     }
     close_kqueue(event_kqueue)?;
+
+    set_termios(&original_termios);
+    print!("\x1b[2J"); // Clear screen
+    print!("\x1b[1;1H"); // Position cursor at the top left
     Ok(())
 }
 
@@ -160,14 +172,16 @@ fn play(path: &str, event_reader: &mut EventReader, event_kqueue: Kqueue) -> Pla
         handle_buffer(state_ptr, output_queue, buffer_ref);
     }
 
-    println!("Properties:");
+    //TODO: Pull out UI stuff into a UI centric component
+    print!("Properties:\r\n");
     for (k, v) in audio_metadata {
-        println!("{k}: {v}");
+        print!("{k}: {v}\r\n");
     }
 
     audio_queue_start(output_queue)?;
 
-    println!("{buffer_config:?}");
+    //TODO: Debug mode for printing this stuff
+    //println!("{buffer_config:?}");
 
     let mut paused = false;
 
@@ -188,9 +202,7 @@ fn play(path: &str, event_reader: &mut EventReader, event_kqueue: Kqueue) -> Pla
                 paused = !paused;
             }
             Event::AudioQueueStopped => {
-                println!("disposing");
                 audio_queue_dispose(output_queue, true)?;
-                println!("closing");
                 audio_file_close(playback_file)?;
                 //TODO: Dont break - implement a tracklist
                 break;
@@ -423,7 +435,6 @@ impl KQueueReader {
         }
     }
 
-    //TODO: Confirm that this blocks
     fn read(&mut self) -> ffi::Kevent {
         unsafe {
             if self.next == self.filled {
@@ -544,7 +555,6 @@ extern "C" fn handle_buffer(
         let state = &mut *(user_data as *mut PlaybackState);
 
         if state.finished {
-            println!("ignoring request to fill buffer");
             return;
         }
 
@@ -555,12 +565,11 @@ extern "C" fn handle_buffer(
             buffer,
         );
 
-        println!("{read_result:?}");
         let packets_read = match read_result {
             //TODO: Report error properly
             Ok(packets_read) => packets_read,
             Err(error) => {
-                println!("oh no: {error}");
+                print!("oh no: {error}\r\n");
                 state.finished = true;
                 return;
             }
@@ -568,7 +577,6 @@ extern "C" fn handle_buffer(
 
         if packets_read == 0 {
             state.finished = true;
-            println!("end of file");
             // Request an asynchronous stop so that buffered audio can finish playing.
             // Queue stopping is detected via seperate callback to property listener.
             //TODO: Handle Error
@@ -588,7 +596,7 @@ extern "C" fn handle_buffer(
             // Anything else is probably a legitimate error condition
             Err(SystemErrorCode(code)) => {
                 //TODO: Report error properly
-                println!("oh no: {code}");
+                print!("oh no: {code}\r\n");
                 state.finished = true;
             }
         }
@@ -636,7 +644,7 @@ extern "C" fn handle_running_state_change(
             }
             Ok(_) => {} // Ignore the queue starting
             //TODO: Feed back error to controller
-            Err(error) => println!("booooo!: {error}"),
+            Err(error) => print!("booooo!: {error}\r\n"),
         }
     }
 }
@@ -1118,4 +1126,53 @@ unsafe fn cfstring_to_string(cfstring: ffi::CFStringRef) -> String {
     assert!(bytes_written as usize == buffer.len());
 
     String::from_utf8_unchecked(buffer)
+}
+
+fn enable_raw_mode(termios: &mut ffi::Termios) {
+    // Disable echoing
+    termios.c_lflag &= !ffi::ECHO;
+
+    // Read input byte by byte instead of line by line
+    termios.c_lflag &= !ffi::ICANON;
+
+    // Disable Ctrl-C and Ctrl-Z signals
+    termios.c_lflag &= !ffi::ISIG;
+
+    // Disable Ctrl-S and Ctrl-Q flow control
+    termios.c_iflag &= !ffi::IXON;
+
+    // Disable Ctrl-V (literal quoting) and Ctrl-O (discard pending)
+    termios.c_lflag &= !ffi::IEXTEN;
+
+    // Fix Ctrl-M by disabling translation of carriage return to newlines
+    termios.c_iflag &= !ffi::ICRNL;
+
+    // Disable adding a carriage raturn to each outputed newline
+    termios.c_oflag &= !ffi::OPOST;
+
+    // Disable break condition causing sigint
+    termios.c_iflag &= !ffi::BRKINT;
+
+    // NOTE: disabling INPCK, ISTRIP, and enabling CS8
+    // are traditionally part of setting up "raw terminal output".
+    // However, this aleady seems to be the case for Terminal.app
+}
+
+fn read_current_termios() -> ffi::Termios {
+    unsafe {
+        let mut termios = MaybeUninit::uninit();
+        let result = ffi::tcgetattr(ffi::STDIN_FILE_NUM as i32, termios.as_mut_ptr());
+        //TODO: Return error
+        if result < 0 {
+            panic!("{}", std::io::Error::last_os_error());
+        }
+        termios.assume_init()
+    }
+}
+
+fn set_termios(termios: &ffi::Termios) {
+    //TODO: Check return value
+    unsafe {
+        ffi::tcsetattr(ffi::STDIN_FILE_NUM as i32, ffi::TCSAFLUSH, termios);
+    }
 }
