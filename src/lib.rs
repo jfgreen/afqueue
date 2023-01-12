@@ -121,11 +121,11 @@ enum Event {
 }
 
 pub fn start(paths: impl IntoIterator<Item = String>) -> PlaybackResult {
-    let mut termios = read_current_termios();
+    let mut termios = read_current_termios()?;
     let original_termios = termios;
     enable_raw_mode(&mut termios);
 
-    set_termios(&termios);
+    set_termios(&termios)?;
 
     let event_kqueue = build_event_kqueue()?;
     let mut event_reader = EventReader::new(event_kqueue);
@@ -137,7 +137,7 @@ pub fn start(paths: impl IntoIterator<Item = String>) -> PlaybackResult {
     }
     close_kqueue(event_kqueue)?;
 
-    set_termios(&original_termios);
+    set_termios(&original_termios)?;
     print!("\x1b[2J"); // Clear screen
     print!("\x1b[1;1H"); // Position cursor at the top left
     Ok(())
@@ -1158,21 +1158,23 @@ fn enable_raw_mode(termios: &mut ffi::Termios) {
     // However, this aleady seems to be the case for Terminal.app
 }
 
-fn read_current_termios() -> ffi::Termios {
+fn read_current_termios() -> Result<ffi::Termios, io::Error> {
     unsafe {
         let mut termios = MaybeUninit::uninit();
         let result = ffi::tcgetattr(ffi::STDIN_FILE_NUM as i32, termios.as_mut_ptr());
-        //TODO: Return error
         if result < 0 {
-            panic!("{}", std::io::Error::last_os_error());
+            return Err(io::Error::last_os_error());
         }
-        termios.assume_init()
+        Ok(termios.assume_init())
     }
 }
 
-fn set_termios(termios: &ffi::Termios) {
-    //TODO: Check return value
+fn set_termios(termios: &ffi::Termios) -> Result<(), io::Error> {
     unsafe {
-        ffi::tcsetattr(ffi::STDIN_FILE_NUM as i32, ffi::TCSAFLUSH, termios);
+        let result = ffi::tcsetattr(ffi::STDIN_FILE_NUM as i32, ffi::TCSAFLUSH, termios);
+        if result < 0 {
+            return Err(io::Error::last_os_error());
+        }
+        Ok(())
     }
 }
