@@ -13,7 +13,8 @@
 // char`. These bindings work on the assumption that a Rust `bool` is ABI
 // compatable with this heratage Carbon era type.
 
-use std::ffi::c_void;
+//TODO: Use these more
+use std::ffi::{c_char, c_ulong, c_void};
 
 /// A type free reference to an opaque Core Foundation object.
 ///
@@ -104,6 +105,21 @@ pub const AUDIO_QUEUE_PROPERTY_MAGIC_COOKIE_DATA: u32 = u32::from_be_bytes(*b"aq
 /// The value of this property is represented by `u32`.
 pub const AUDIO_QUEUE_PROPERTY_IS_RUNNING: u32 = u32::from_be_bytes(*b"aqrn");
 
+/// Constant used to set or query the property that determines whether an audio
+/// queue has level metering enabled.
+///
+/// 0 = off, 1 = on
+///
+/// The value of this property is represented by `u32`.
+pub const AUDIO_QUEUE_PROPERTY_ENABLE_LEVEL_METERING: u32 = u32::from_be_bytes(*b"aqme");
+
+/// Constant used to query the state of an audio queues level meter.
+///
+/// Using this constant with `audio_file_get_property` will return an array of
+/// `AudioQueueLevelMeterState` structs, with one struct per channel. Metering
+/// values in each struct will be normalised between 0 and 1.
+pub const AUDIO_QUEUE_PROPERTY_LEVEL_METER_STATE: u32 = u32::from_be_bytes(*b"aqmv");
+
 /// Error returned when trying to enqueue on an audio queue that is resetting,
 /// stopping, or being disposed.
 pub const AUDIO_QUEUE_ERROR_ENQUEUE_DURING_RESET: i32 = -66632;
@@ -138,7 +154,7 @@ pub type AudioFormatFlags = u32;
 /// even have a variable size.
 ///
 /// To determine the duration represented by one packet, use the `sample_rate`
-/// field with the `frames_per_packet`  field as follows:
+/// field with the `frames_per_packet` field as follows:
 ///
 /// The duration represented by a single packet can be calculated as follows:
 /// ```
@@ -151,9 +167,7 @@ pub type AudioFormatFlags = u32;
 /// individual packet.
 ///
 /// A field value of 0 indicates that the value is either unknown or not
-/// applicable to the format. Always initialise the fields of a new audio stream
-/// basic description structure to zero, as shown here:
-/// AudioStreamBasicDescription myAudioDataFormat = {0};
+/// applicable to the format.
 #[derive(Debug)]
 #[repr(C)]
 pub struct AudioStreamBasicDescription {
@@ -310,8 +324,17 @@ pub struct AudioTimeStamp {
     reserved: u32,
 }
 
+/// Represents the current meter level for a single channel of an audio queue
+#[repr(C)]
+pub struct AudioQueueLevelMeterState {
+    /// Average RMS power
+    pub average_power: f32,
+    /// Peak RMS power
+    pub peak_power: f32,
+}
+
 /// Callback invoked whenever a specified audio queue property changes.
-////
+///
 /// This type defines a callback function for listening to changes to an audio
 /// queue property.
 ///
@@ -871,6 +894,7 @@ extern "C" {
 }
 
 pub const EVFILT_READ: i16 = -1;
+pub const EVFILT_TIMER: i16 = -7;
 pub const EVFILT_USER: i16 = -10;
 pub const EV_ADD: u16 = 0x1;
 pub const EV_ENABLE: u16 = 0x4;
@@ -878,6 +902,7 @@ pub const EV_ONESHOT: u16 = 0x10;
 pub const EV_CLEAR: u16 = 0x20;
 pub const EV_DISPATCH: u16 = 0x80;
 pub const NOTE_TRIGGER: u32 = 0x01000000;
+pub const NOTE_USECONDS: u32 = 0x00000002;
 
 pub const STDIN_FILE_NUM: u64 = 0;
 
@@ -907,9 +932,9 @@ pub struct Kevent {
 
 //TODO: Document termios stuff
 
-pub type TCFlag = u64;
-pub type CC = u8;
-pub type Speed = u8;
+pub type TCFlag = c_ulong;
+pub type CC = c_char;
+pub type Speed = c_ulong;
 
 /// Size of the `c_cc` control chars array.
 pub const NCCS: usize = 20;
@@ -957,5 +982,5 @@ pub const OPOST: TCFlag = 0x00000001;
 /// Enable sending SIGINT on break
 pub const BRKINT: TCFlag = 0x00000002;
 
-/// /*D*/rain output, flush input
+/// Drain output, flush input
 pub const TCSAFLUSH: i32 = 2;

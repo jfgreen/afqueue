@@ -15,20 +15,27 @@
 use std::cmp;
 use std::ffi::{c_void, CStr, CString, NulError};
 use std::fmt;
-use std::io;
+use std::io::{self, Write};
 use std::mem::{self, MaybeUninit};
 use std::ptr;
 
 mod ffi;
 
-use ffi::{AudioFileID, AudioQueueBufferRef, AudioQueuePropertyID, AudioQueueRef, Kqueue};
+use ffi::{
+    AudioFileID, AudioQueueBufferRef, AudioQueueLevelMeterState, AudioQueuePropertyID,
+    AudioQueueRef, Kqueue,
+};
 
 const LOWER_BUFFER_SIZE_HINT: u32 = 0x4000;
 const UPPER_BUFFER_SIZE_HINT: u32 = 0x50000;
 const BUFFER_SECONDS_HINT: f64 = 0.5;
 const BUFFER_COUNT: usize = 3;
 
-const AUDIO_QUEUE_PLAYBACK_FINISHED: u64 = 42;
+const AUDIO_QUEUE_PLAYBACK_FINISHED: u64 = 40;
+const UI_TIMER_TICK: u64 = 41;
+
+//TODO: Disable UI tick whilst paused
+const UI_TICK_DURATION_MICROSECONDS: i64 = 33333;
 
 type PacketPosition = i64;
 type PacketCount = u32;
@@ -118,6 +125,7 @@ enum Event {
     PauseKeyPressed,
     ExitKeyPressed,
     AudioQueueStopped,
+    UITick,
 }
 
 pub fn start(paths: impl IntoIterator<Item = String>) -> PlaybackResult {
@@ -126,6 +134,7 @@ pub fn start(paths: impl IntoIterator<Item = String>) -> PlaybackResult {
     enable_raw_mode(&mut termios);
 
     set_termios(&termios)?;
+    print!("\x1b[?25l"); // Hide cursor
 
     let event_kqueue = build_event_kqueue()?;
     let mut event_reader = EventReader::new(event_kqueue);
@@ -138,8 +147,10 @@ pub fn start(paths: impl IntoIterator<Item = String>) -> PlaybackResult {
     close_kqueue(event_kqueue)?;
 
     set_termios(&original_termios)?;
+
     print!("\x1b[2J"); // Clear screen
     print!("\x1b[1;1H"); // Position cursor at the top left
+    print!("\x1b[?25h"); // Show cursor
     Ok(())
 }
 
@@ -150,6 +161,7 @@ fn play(path: &str, event_reader: &mut EventReader, event_kqueue: Kqueue) -> Pla
     let playback_file = audio_file_open(&playback_path)?;
     let audio_metadata = audio_file_read_metadata(playback_file)?;
     let buffer_config = calculate_buffer_configuration(playback_file)?;
+    let channel_count = buffer_config.format.channels_per_frame as usize;
     let playback_state = build_playback_state(playback_file, &buffer_config, event_kqueue);
     let playback_state = Box::new(playback_state);
     let state_ptr = Box::into_raw(playback_state) as *mut c_void;
@@ -157,6 +169,7 @@ fn play(path: &str, event_reader: &mut EventReader, event_kqueue: Kqueue) -> Pla
     let buffers = create_buffers(output_queue, &buffer_config)?;
 
     audio_queue_listen_to_run_state(output_queue, event_kqueue)?;
+    audio_queue_enable_metering(output_queue);
 
     if let Some(cookie) = audio_file_read_magic_cookie(playback_file)? {
         audio_queue_set_magic_cookie(output_queue, cookie)?
@@ -172,11 +185,20 @@ fn play(path: &str, event_reader: &mut EventReader, event_kqueue: Kqueue) -> Pla
         handle_buffer(state_ptr, output_queue, buffer_ref);
     }
 
+    //TODO: Experiment with writing explocity to std out via std::io::stdout
     //TODO: Pull out UI stuff into a UI centric component
     print!("Properties:\r\n");
     for (k, v) in audio_metadata {
         print!("{k}: {v}\r\n");
     }
+
+    //TODO: Test with channel count > 2 (figure out how we want to support this)
+    // It looks like we might be able to read kAudioFilePropertyChannelLayout and
+    // set kAudioQueueProperty_ChannelLayout
+
+    // TODO: Might be interesting to see
+    // what happens if we set the queue to mono but give it a stereo file
+    print!("channel count: {}\r\n", channel_count);
 
     audio_queue_start(output_queue)?;
 
@@ -184,6 +206,8 @@ fn play(path: &str, event_reader: &mut EventReader, event_kqueue: Kqueue) -> Pla
     //println!("{buffer_config:?}");
 
     let mut paused = false;
+
+    enable_ui_timer_event(event_kqueue, UI_TICK_DURATION_MICROSECONDS);
 
     //TODO: Make 'q' exit completely, and maybe 's' for skip
 
@@ -209,6 +233,20 @@ fn play(path: &str, event_reader: &mut EventReader, event_kqueue: Kqueue) -> Pla
             }
             Event::ExitKeyPressed => {
                 audio_queue_stop(output_queue, true)?;
+            }
+            Event::UITick => {
+                //TODO: Explore different meters
+                // amplitude over time, either wrap around or scroll
+                // varios classic vu meters
+
+                //TODO: Maintain a lock on stdout
+
+                audio_queue_read_meter_level(output_queue, channel_count)?;
+
+                //TODO: Dont ignore this error
+                io::stdout().flush().unwrap();
+
+                enable_ui_timer_event(event_kqueue, UI_TICK_DURATION_MICROSECONDS);
             }
         }
     }
@@ -254,6 +292,37 @@ fn enable_playback_finished_event(kqueue: Kqueue) -> Result<(), io::Error> {
     }
 }
 
+//TODO: Return error instead of panic
+fn enable_ui_timer_event(kqueue: Kqueue, usec: i64) {
+    unsafe {
+        let ui_timer_event = ffi::Kevent {
+            ident: UI_TIMER_TICK,
+            filter: ffi::EVFILT_TIMER,
+            flags: ffi::EV_ADD | ffi::EV_ENABLE | ffi::EV_ONESHOT,
+            fflags: ffi::NOTE_USECONDS,
+            data: usec,
+            udata: 0,
+        };
+
+        let changelist = [ui_timer_event];
+
+        let result = ffi::kevent(
+            kqueue,
+            changelist.as_ptr(),
+            changelist.len() as i32,
+            ptr::null_mut(),
+            0,
+            ptr::null(),
+        );
+
+        if result < 0 {
+            panic!("{}", io::Error::last_os_error());
+        }
+    }
+}
+
+//TODO: Refactor, think about abstractions thata might make it a little easier
+// to follow
 fn build_event_kqueue() -> Result<Kqueue, io::Error> {
     unsafe {
         let kqueue = ffi::kqueue();
@@ -361,6 +430,7 @@ impl EventReader {
                 (AUDIO_QUEUE_PLAYBACK_FINISHED, ffi::EVFILT_USER) => {
                     return Event::AudioQueueStopped
                 }
+                (UI_TIMER_TICK, ffi::EVFILT_TIMER) => return Event::UITick,
                 _ => continue,
             }
         }
@@ -370,6 +440,7 @@ impl EventReader {
 const KEVENT_BUFFER_SIZE: usize = 10;
 const INPUT_BUFFER_SIZE: usize = 10;
 
+//TODO: Try and replace this with a std::io::Stdin buffered reader
 struct InputReader {
     buffer: [u8; INPUT_BUFFER_SIZE],
     next: usize,
@@ -418,6 +489,7 @@ impl InputReader {
     }
 }
 
+//TODO: Would this be more ideomatic if we implemented the buf reader trait?
 struct KQueueReader {
     buffer: [ffi::Kevent; KEVENT_BUFFER_SIZE],
     kqueue: Kqueue,
@@ -1080,6 +1152,72 @@ fn audio_queue_read_run_state(queue: AudioQueueRef) -> SystemResult<u32> {
         assert!(data_size == mem::size_of::<u32>() as u32);
 
         Ok(data)
+    }
+}
+
+fn audio_queue_enable_metering(queue: AudioQueueRef) -> SystemResult<()> {
+    unsafe {
+        let enabled: u32 = 1;
+
+        let status = ffi::audio_queue_set_property(
+            queue,
+            ffi::AUDIO_QUEUE_PROPERTY_ENABLE_LEVEL_METERING,
+            &enabled as *const _ as *const c_void,
+            mem::size_of::<u32>() as u32,
+        );
+
+        if status == 0 {
+            Ok(())
+        } else {
+            Err(SystemErrorCode(status))
+        }
+    }
+}
+
+fn audio_queue_read_meter_level(
+    queue: AudioQueueRef,
+    channel_count: usize,
+) -> SystemResult<Vec<AudioQueueLevelMeterState>> {
+    //TODO: Figure out how to return slice
+    //TODO: Extract audio_queue_get_property function for this and
+    // audio_queue_read_run_state. TODO: Support stereo
+    unsafe {
+        let mut meter_state: Vec<AudioQueueLevelMeterState> = Vec::with_capacity(channel_count);
+        let expected_size = (mem::size_of::<AudioQueueLevelMeterState>() * channel_count) as u32;
+        let mut data_size = expected_size;
+
+        let status = ffi::audio_queue_get_property(
+            queue,
+            ffi::AUDIO_QUEUE_PROPERTY_LEVEL_METER_STATE,
+            meter_state.as_mut_ptr() as *mut c_void,
+            &mut data_size as *mut _,
+        );
+
+        if status != 0 {
+            return Err(SystemErrorCode(status));
+        }
+
+        assert!(data_size == expected_size);
+        meter_state.set_len(channel_count);
+
+        //TODO: Test UI works when going from mono file to stereo file
+
+        //FIXME: The following UI code should not live here
+
+        //TODO: Get max bar length from term
+        let max_bar_length: f32 = 100.0;
+
+        for channel in meter_state.iter() {
+            print!("\r\n");
+            let bar_length = (max_bar_length * channel.average_power) as usize;
+            for _ in 0..bar_length {
+                print!("█")
+            }
+            print!("\x1b[K"); // Clear remainder of line
+        }
+        print!("\x1b[{}A", channel_count); // Hop back up to channel
+
+        Ok(meter_state)
     }
 }
 
