@@ -1,4 +1,3 @@
-use afqueue;
 use std::{env, process};
 
 /// Playback a list of files passed in via command line arguments
@@ -16,7 +15,7 @@ fn main() {
 fn parse_args(args: impl IntoIterator<Item = String>) -> impl Iterator<Item = String> {
     let mut args = args.into_iter().peekable();
     let exec = args.next();
-    if args.peek() == None {
+    if args.peek().is_none() {
         let exec = exec.as_deref().unwrap_or("afqueue");
         println!("Usage: {exec} [audio-file ...]");
         process::exit(1);
