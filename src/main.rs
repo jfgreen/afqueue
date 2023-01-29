@@ -1,4 +1,4 @@
-//! The afqueue module manages playback of a queue of audio files.
+//! Afqueue manages playback of a queue of audio files.
 //!
 //! Built on top of the macOS AudioToolbox framework.
 
@@ -10,7 +10,6 @@
 // TODO: Use kAudioFilePropertyFormatList to deal with multi format files?
 // TODO: Query the files channel layout to handle multi channel files?
 // TODO: Check we dont orphan threads from one file to the next.
-// TODO: Start consolidate things into abstractions
 
 #![feature(extern_types)]
 
@@ -35,7 +34,7 @@ use ffi::termios::{self, tcgetattr, tcsetattr, Termios};
 
 //TODO: Fix metering breaking on terminal resize
 
-//TODO: Disable UI tick whilst paused
+//TODO: Disable UI tick whilst paused?
 const UI_TICK_DURATION_MICROSECONDS: i64 = 33333;
 
 use std::{env, process};
@@ -78,8 +77,12 @@ fn start(paths: impl IntoIterator<Item = String>) -> PlaybackResult<()> {
 
     event_reader.enable_ui_timer_event(UI_TICK_DURATION_MICROSECONDS)?;
 
-    // TODO: This might be nicer / less nested if we pulled from an iterator
-    for path in paths {
+    let mut paths = paths.into_iter();
+    let mut next_path = paths.next();
+
+    while let Some(path) = next_path {
+        next_path = paths.next();
+
         print!("\x1b[2J"); // Clear screen
         print!("\x1b[1;1H"); // Position cursor at the top left
 
@@ -106,8 +109,12 @@ fn start(paths: impl IntoIterator<Item = String>) -> PlaybackResult<()> {
                 Event::PauseKeyPressed => {
                     player.toggle_paused()?;
                 }
+                Event::NextTrackKeyPressed => {
+                    player.stop()?;
+                }
                 Event::ExitKeyPressed => {
                     player.stop()?;
+                    next_path = None
                 }
                 //TODO: Rename to "end of playback" or something
                 Event::AudioQueueStopped => {

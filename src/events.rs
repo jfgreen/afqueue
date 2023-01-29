@@ -11,6 +11,7 @@ const KEVENT_BUFFER_SIZE: usize = 10;
 const INPUT_BUFFER_SIZE: usize = 10;
 
 pub enum Event {
+    NextTrackKeyPressed,
     PauseKeyPressed,
     ExitKeyPressed,
     AudioQueueStopped,
@@ -73,6 +74,7 @@ impl Receiver {
         loop {
             if let Some(input_char) = self.input_reader.read() {
                 match input_char {
+                    'n' => return Event::NextTrackKeyPressed,
                     'q' => return Event::ExitKeyPressed,
                     'p' => return Event::PauseKeyPressed,
                     _ => continue,
