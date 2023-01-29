@@ -2,7 +2,7 @@
 //!
 //! Built on top of the macOS AudioToolbox framework.
 
-//TODO: Come up with new name for this project
+// TODO: Come up with new name for this project
 
 // TODO: Diagram of how the different moving parts interact...
 
@@ -74,18 +74,16 @@ fn start(paths: impl IntoIterator<Item = String>) -> PlaybackResult<()> {
     set_termios(&termios)?;
     print!("\x1b[?25l"); // Hide cursor
 
-    let (event_kqueue, mut event_reader) = events::build_event_kqueue()?;
-    //TODO: Instead of passing around a queue reference (and lots of public
-    // methods), consider creating a trivially cloneable event_writer
+    let (event_sender, mut event_reader) = events::build_event_queue()?;
 
-    events::enable_ui_timer_event(event_kqueue, UI_TICK_DURATION_MICROSECONDS);
+    event_reader.enable_ui_timer_event(UI_TICK_DURATION_MICROSECONDS)?;
 
     // TODO: This might be nicer / less nested if we pulled from an iterator
     for path in paths {
         print!("\x1b[2J"); // Clear screen
         print!("\x1b[1;1H"); // Position cursor at the top left
 
-        let mut player = AudioFilePlayer::initialise(&path)?;
+        let mut player = AudioFilePlayer::initialise(&path, event_sender.clone())?;
         //TODO: Experiment with writing explocity to std out via std::io::stdout
         //TODO: Pull out UI stuff into a UI centric component
         print!("Properties:\r\n");
@@ -98,7 +96,7 @@ fn start(paths: impl IntoIterator<Item = String>) -> PlaybackResult<()> {
         // set kAudioQueueProperty_ChannelLayout. Might be interesting to see
         // what happens if we set the queue to mono but give it a stereo file
 
-        player.start_playback(event_kqueue)?;
+        player.start_playback()?;
 
         //TODO: Make 'q' exit completely, and maybe 's' for skip
         'event_loop: loop {
@@ -140,14 +138,14 @@ fn start(paths: impl IntoIterator<Item = String>) -> PlaybackResult<()> {
                     //TODO: Dont ignore this error
                     io::stdout().flush().unwrap();
 
-                    events::enable_ui_timer_event(event_kqueue, UI_TICK_DURATION_MICROSECONDS);
+                    event_reader.enable_ui_timer_event(UI_TICK_DURATION_MICROSECONDS)?;
                 }
             }
         }
         // Reset the playback finished event for re-use if there is another file to play
-        events::enable_playback_finished_event(event_kqueue)?;
+        event_reader.enable_playback_finished_event()?;
     }
-    events::close_kqueue(event_kqueue)?;
+    event_reader.close()?;
 
     set_termios(&original_termios)?;
 

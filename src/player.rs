@@ -9,7 +9,6 @@ use crate::ffi::audio_toolbox::{
     self, AudioFileID, AudioQueueBufferRef, AudioQueueLevelMeterState, AudioQueuePropertyID,
     AudioQueueRef, AudioStreamBasicDescription,
 };
-use crate::ffi::kqueue::Kqueue;
 
 use crate::ffi::core_foundation;
 
@@ -113,7 +112,7 @@ pub struct AudioFilePlayer {
 }
 
 impl AudioFilePlayer {
-    pub fn initialise(path: &str) -> PlaybackResult<Self> {
+    pub fn initialise(path: &str, event_sender: events::Sender) -> PlaybackResult<Self> {
         let path = cstring_path(path)?;
         let audio_file = audio_file_open(&path)?;
         let buffer_config = calculate_buffer_configuration(audio_file)?;
@@ -129,6 +128,7 @@ impl AudioFilePlayer {
             playback_file: audio_file,
             packets_per_buffer: buffer_config.packets_per_buffer,
             reader,
+            event_sender,
             current_packet: 0,
             finished: false,
         };
@@ -141,6 +141,8 @@ impl AudioFilePlayer {
         if let Some(cookie) = audio_file_read_magic_cookie(audio_file)? {
             audio_queue_set_magic_cookie(output_queue, cookie)?
         }
+
+        audio_queue_listen_to_run_state(output_queue, state_ptr)?;
 
         // While handle_buffer is usually invoked from the callback thread to refill a
         // buffer, we call it a few times before starting to pre load the buffers with
@@ -166,8 +168,7 @@ impl AudioFilePlayer {
         audio_file_read_metadata(self.audio_file).map_err(|e| e.into())
     }
 
-    pub fn start_playback(&mut self, kqueue: Kqueue) -> PlaybackResult<()> {
-        audio_queue_listen_to_run_state(self.output_queue, kqueue as *mut c_void)?;
+    pub fn start_playback(&mut self) -> PlaybackResult<()> {
         audio_queue_enable_metering(self.output_queue)?;
         audio_queue_start(self.output_queue)?;
         Ok(())
@@ -239,10 +240,12 @@ fn calculate_buffer_configuration(audio_file: AudioFileID) -> SystemResult<Buffe
     })
 }
 
-#[derive(Debug)]
+//TODO: Can we push some methods onto Playback, state, maybe rename it
+// AudioQueueCallbackHandler or something?
 struct PlaybackState {
     playback_file: AudioFileID,
     reader: AudioFileReader,
+    event_sender: events::Sender,
     packets_per_buffer: PacketCount,
     current_packet: PacketPosition,
     finished: bool,
@@ -335,15 +338,21 @@ extern "C" fn handle_running_state_change(
     // This handler should only react to changes to the "is running" property
     assert!(property == audio_toolbox::AUDIO_QUEUE_PROPERTY_IS_RUNNING);
 
-    let kqueue = user_data as Kqueue;
+    unsafe {
+        let state = &mut *(user_data as *mut PlaybackState);
 
-    match audio_queue_read_run_state(audio_queue) {
-        Ok(0) => {
-            events::trigger_playback_finished_event(kqueue);
+        match audio_queue_read_run_state(audio_queue) {
+            Ok(0) => {
+                // TODO: Better error messaging
+                state
+                    .event_sender
+                    .trigger_playback_finished_event()
+                    .expect("oh no");
+            }
+            Ok(_) => {} // Ignore the queue starting
+            //TODO: Feed back error to controller?
+            Err(error) => print!("booooo!: {error}\r\n"),
         }
-        Ok(_) => {} // Ignore the queue starting
-        //TODO: Feed back error to controller?
-        Err(error) => print!("booooo!: {error}\r\n"),
     }
 }
 
