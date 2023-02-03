@@ -133,6 +133,8 @@ impl AudioFilePlayer {
             finished: false,
         };
 
+        //TODO: Are these boxes leaked if we hit an error in between here and returing
+        // an AudioFilePlayer?
         let playback_state = Box::new(playback_state);
         let state_ptr = Box::into_raw(playback_state) as *mut c_void;
         let output_queue = output_queue_create(&buffer_config.format, state_ptr)?;
@@ -240,7 +242,7 @@ fn calculate_buffer_configuration(audio_file: AudioFileID) -> SystemResult<Buffe
     })
 }
 
-//TODO: Can we push some methods onto Playback, state, maybe rename it
+// TODO: Can we push some methods onto Playback, state, maybe rename it
 // AudioQueueCallbackHandler or something?
 struct PlaybackState {
     playback_file: AudioFileID,
@@ -267,7 +269,7 @@ struct PlaybackState {
 // The queue could continue to callback with remaining buffers.
 // Avoid unnecessary attempts to read the file again.
 
-//TODO: Handle errors properly, send back to main thread somehow?
+// TODO: Handle errors properly, send back to main thread somehow?
 
 // This handler assumes `buffer` adheres to several invarients:
 // - Is at least `packets_per_buffer` big

@@ -1,4 +1,5 @@
 use std::ffi::c_void;
+use std::fmt;
 use std::io;
 use std::ptr;
 
@@ -9,6 +10,37 @@ const UI_TIMER_TICK: u64 = 41;
 
 const KEVENT_BUFFER_SIZE: usize = 10;
 const INPUT_BUFFER_SIZE: usize = 10;
+
+#[derive(Debug)]
+pub enum EventError {
+    Create(io::Error),
+    Add(io::Error),
+    Trigger(io::Error),
+    Enable(io::Error),
+    Close(io::Error),
+}
+
+impl fmt::Display for EventError {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            EventError::Create(err) => {
+                write!(f, "IO error creating kqueue'{}'", err)
+            }
+            EventError::Add(err) => {
+                write!(f, "IO error adding event filter '{}'", err)
+            }
+            EventError::Trigger(err) => {
+                write!(f, "IO error triggering event '{}'", err)
+            }
+            EventError::Enable(err) => {
+                write!(f, "IO error enabling event '{}'", err)
+            }
+            EventError::Close(err) => {
+                write!(f, "IO error closing kqueue '{}'", err)
+            }
+        }
+    }
+}
 
 pub enum Event {
     NextTrackKeyPressed,
@@ -24,7 +56,7 @@ pub struct Sender {
 }
 
 impl Sender {
-    pub fn trigger_playback_finished_event(&mut self) -> Result<(), io::Error> {
+    pub fn trigger_playback_finished_event(&mut self) -> Result<(), EventError> {
         //TODO: Extract function for writing to kqueue
         unsafe {
             let playback_finished_event = Kevent {
@@ -48,7 +80,8 @@ impl Sender {
             );
 
             if result < 0 {
-                return Err(io::Error::last_os_error());
+                let io_err = io::Error::last_os_error();
+                return Err(EventError::Trigger(io_err));
             }
             Ok(())
         }
@@ -69,7 +102,7 @@ impl Receiver {
         // - If nothing buffered on std, instead perform a blocking read on the kqueue.
         // - If kqueue returns a user event, then return it.
         // - If the kqueue indicates that stdin has input to read, attempt to fill stdin
-        //   and try again from the top.
+        //   and try again from the top. TODO: Flow chart would be nice
 
         loop {
             if let Some(input_char) = self.input_reader.read() {
@@ -98,7 +131,7 @@ impl Receiver {
         }
     }
 
-    pub fn enable_playback_finished_event(&mut self) -> Result<(), io::Error> {
+    pub fn enable_playback_finished_event(&mut self) -> Result<(), EventError> {
         unsafe {
             let playback_finished_event = Kevent {
                 ident: AUDIO_QUEUE_PLAYBACK_FINISHED,
@@ -121,13 +154,14 @@ impl Receiver {
             );
 
             if result < 0 {
-                return Err(io::Error::last_os_error());
+                let io_err = io::Error::last_os_error();
+                return Err(EventError::Enable(io_err));
             }
             Ok(())
         }
     }
 
-    pub fn enable_ui_timer_event(&mut self, usec: i64) -> Result<(), io::Error> {
+    pub fn enable_ui_timer_event(&mut self, usec: i64) -> Result<(), EventError> {
         unsafe {
             let ui_timer_event = Kevent {
                 ident: UI_TIMER_TICK,
@@ -150,17 +184,20 @@ impl Receiver {
             );
 
             if result < 0 {
-                return Err(io::Error::last_os_error());
+                let io_err = io::Error::last_os_error();
+                return Err(EventError::Enable(io_err));
             }
             Ok(())
         }
     }
-    pub fn close(self) -> Result<(), io::Error> {
+
+    pub fn close(self) -> Result<(), EventError> {
         //TODO: Could this be drop instead?
         unsafe {
             let result = kq::close(self.queue);
             if result < 0 {
-                Err(io::Error::last_os_error())
+                let io_err = io::Error::last_os_error();
+                return Err(EventError::Close(io_err));
             } else {
                 Ok(())
             }
@@ -170,11 +207,12 @@ impl Receiver {
 
 //TODO: Refactor, think about abstractions that might make it a little easier
 // to follow
-pub fn build_event_queue() -> Result<(Sender, Receiver), io::Error> {
+pub fn build_event_queue() -> Result<(Sender, Receiver), EventError> {
     unsafe {
         let kqueue = kqueue();
         if kqueue < 0 {
-            return Err(io::Error::last_os_error());
+            let io_err = io::Error::last_os_error();
+            return Err(EventError::Create(io_err));
         }
 
         // TODO: See if EV_ENABLE is actually needed?
@@ -218,7 +256,8 @@ pub fn build_event_queue() -> Result<(Sender, Receiver), io::Error> {
         );
 
         if result < 0 {
-            return Err(io::Error::last_os_error());
+            let io_err = io::Error::last_os_error();
+            return Err(EventError::Add(io_err));
         }
 
         let sender = Sender { queue: kqueue };
@@ -264,6 +303,7 @@ impl InputReader {
             );
 
             if result < 0 {
+                //TODO: Dont panic, expose error
                 panic!("{}", io::Error::last_os_error());
             }
 
@@ -313,6 +353,7 @@ impl KQueueReader {
                 );
 
                 if result < 0 {
+                    //TODO: Dont panic, expose error
                     panic!("{}", io::Error::last_os_error());
                 }
 
