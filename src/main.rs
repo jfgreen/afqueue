@@ -48,7 +48,7 @@ fn main() {
     let audio_file_paths = parse_args(args);
     start(audio_file_paths).unwrap_or_else(|err| {
         println!("Failed to playback files");
-        println!("{}", err);
+        println!("{err}");
         process::exit(1);
     });
 }
@@ -94,13 +94,13 @@ impl fmt::Display for AfqueueError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
             AfqueueError::Playback(err) => {
-                write!(f, "Problem playing back audio, {}", err)
+                write!(f, "Problem playing back audio, {err}")
             }
             AfqueueError::UI(err) => {
-                write!(f, "Problem in UI, {}", err)
+                write!(f, "Problem in UI, {err}")
             }
             AfqueueError::Event(err) => {
-                write!(f, "Problem in event loop, {}", err)
+                write!(f, "Problem in event loop, {err}")
             }
         }
     }
@@ -117,10 +117,10 @@ fn start(paths: impl IntoIterator<Item = String>) -> Result<(), AfqueueError> {
 
     event_reader.enable_ui_timer_event(UI_TICK_DURATION_MICROSECONDS)?;
 
-    let mut paths = paths.into_iter();
     let mut exit_requested = false;
 
-    while let Some(path) = paths.next() {
+    for path in paths {
+
         if exit_requested {
             break;
         }

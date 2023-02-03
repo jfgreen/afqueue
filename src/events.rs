@@ -24,19 +24,19 @@ impl fmt::Display for EventError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
             EventError::Create(err) => {
-                write!(f, "IO error creating kqueue'{}'", err)
+                write!(f, "IO error creating kqueue'{err}'")
             }
             EventError::Add(err) => {
-                write!(f, "IO error adding event filter '{}'", err)
+                write!(f, "IO error adding event filter '{err}'")
             }
             EventError::Trigger(err) => {
-                write!(f, "IO error triggering event '{}'", err)
+                write!(f, "IO error triggering event '{err}'")
             }
             EventError::Enable(err) => {
-                write!(f, "IO error enabling event '{}'", err)
+                write!(f, "IO error enabling event '{err}'")
             }
             EventError::Close(err) => {
-                write!(f, "IO error closing kqueue '{}'", err)
+                write!(f, "IO error closing kqueue '{err}'")
             }
         }
     }
@@ -197,7 +197,7 @@ impl Receiver {
             let result = kq::close(self.queue);
             if result < 0 {
                 let io_err = io::Error::last_os_error();
-                return Err(EventError::Close(io_err));
+                Err(EventError::Close(io_err))
             } else {
                 Ok(())
             }

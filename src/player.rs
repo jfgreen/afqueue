@@ -54,13 +54,13 @@ impl fmt::Display for PlaybackError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
             PlaybackError::Path(err) => {
-                write!(f, "Supplied string is not a valid path: {}", err)
+                write!(f, "Supplied string is not a valid path: {err}")
             }
             PlaybackError::System(SystemErrorCode(code)) => {
-                write!(f, "System error, code: '{}'", code)
+                write!(f, "System error, code: '{code}'")
             }
             PlaybackError::IO(err) => {
-                write!(f, "IO error: '{}'", err)
+                write!(f, "IO error: '{err}'")
             }
         }
     }
@@ -82,7 +82,7 @@ impl fmt::Display for PathError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
             PathError::InteriorNull(err) => {
-                write!(f, "Path contained a null: {}", err)
+                write!(f, "Path contained a null: {err}")
             }
             PathError::PathIsEmpty => {
                 write!(f, "Attempted to interpret an empty string as a path")
@@ -661,8 +661,8 @@ fn output_queue_create(
             format,
             handle_buffer,
             user_data,
-            0 as *const _, // Run loop
-            0 as *const _, // Run loop mode
+            std::ptr::null(), // Run loop
+            std::ptr::null(), // Run loop mode
             0,             // flags
             output_queue.as_mut_ptr(),
         );

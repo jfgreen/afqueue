@@ -30,7 +30,7 @@ impl fmt::Display for UIError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
             UIError::IO(err) => {
-                write!(f, "IO error interacting with termios: '{}'", err)
+                write!(f, "IO error interacting with termios: '{err}'")
             }
         }
     }
