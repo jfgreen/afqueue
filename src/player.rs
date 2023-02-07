@@ -663,7 +663,7 @@ fn output_queue_create(
             user_data,
             std::ptr::null(), // Run loop
             std::ptr::null(), // Run loop mode
-            0,             // flags
+            0,                // flags
             output_queue.as_mut_ptr(),
         );
 

@@ -1,19 +1,26 @@
 use std::fmt;
 use std::io::{self, Write};
+use std::os::fd::AsRawFd;
 
 use std::mem::MaybeUninit;
 
 use crate::ffi::termios::{self, tcgetattr, tcsetattr, Termios};
 
-pub struct TerminalUI {
-    file_descriptor: i32,
-    original_termios: Termios,
-}
+// Terminal escape codes
+const ESCAPE: &str = "\x1b[";
+const HIDE_CURSOR: &str = "?25l";
+const SHOW_CURSOR: &str = "?25h";
+const CLEAR_SCREEN: &str = "2J";
+const CLEAR_LINE_REMAINDER: &str = "K";
+const MOVE_CURSOR_UPPER_LEFT: &str = ";f";
+const MOVE_CURSOR_UP_LINES: &str = "A";
 
-//TODO: Use constants (or little functions?) for escape codes
-//TODO: Replace print! macro with more explicit write to stdout
+const NEW_LINE: &str = "\r\n";
+
 //TODO: Fix metering breaking on terminal resize
 //TODO: Maintain a lock on stdout?
+//TODO: Explore different meters
+//TODO: Colourised meter?
 
 #[derive(Debug)]
 pub enum UIError {
@@ -36,62 +43,96 @@ impl fmt::Display for UIError {
     }
 }
 
+type UIResult = Result<(), UIError>;
+
+pub struct TerminalUI {
+    stdout: io::Stdout,
+    original_termios: Termios,
+}
+
 impl TerminalUI {
-    pub fn activate(file_descriptor: i32) -> Result<Self, UIError> {
-        let mut termios = read_current_termios(file_descriptor)?;
+    pub fn activate() -> Result<Self, UIError> {
+        //TODO: try locking stdout
+        let mut stdout = io::stdout();
+
+        let mut termios = read_current_termios(&stdout)?;
+
         let original_termios = termios;
         enable_raw_mode(&mut termios);
 
-        set_termios(file_descriptor, &termios)?;
-        print!("\x1b[?25l"); // Hide cursor
+        set_termios(&mut stdout, &termios)?;
+
+        write!(stdout, "{ESCAPE}{HIDE_CURSOR}")?;
 
         Ok(TerminalUI {
-            file_descriptor,
+            stdout,
             original_termios,
         })
     }
 
-    pub fn clear_screen(&self) {
-        print!("\x1b[2J"); // Clear screen
-        print!("\x1b[1;1H"); // Position cursor at the top left
+    pub fn reset_screen(&mut self) -> UIResult {
+        write!(self.stdout, "{ESCAPE}{CLEAR_SCREEN}")?;
+        write!(self.stdout, "{ESCAPE}{MOVE_CURSOR_UPPER_LEFT}")?;
+        Ok(())
     }
 
-    pub fn display_metadata(&self, metadata: Vec<(String, String)>) {
-        print!("Properties:\r\n");
+    pub fn display_metadata(&mut self, metadata: &[(String, String)]) -> UIResult {
+        write!(self.stdout, "Properties:{NEW_LINE}")?;
         for (k, v) in metadata {
-            print!("{k}: {v}\r\n");
+            write!(self.stdout, "{k}: {v}{NEW_LINE}")?;
         }
+        Ok(())
     }
 
-    pub fn display_meter(&self, meter_channels: Vec<f32>) {
-        //TODO: Explore different meters
-        //TODO: Colourised meter?
-
+    pub fn display_meter(&mut self, meter_channels: Vec<f32>) -> UIResult {
         //TODO: Get max bar length from term
         let max_bar_length: f32 = 100.0;
 
         for channel_power in meter_channels.iter() {
-            print!("\r\n");
             let bar_length = (max_bar_length * channel_power) as usize;
+            write!(self.stdout, "{NEW_LINE}")?;
             for _ in 0..bar_length {
-                print!("█")
+                write!(self.stdout, "█")?;
             }
-            print!("\x1b[K"); // Clear remainder of line
+            write!(self.stdout, "{ESCAPE}{CLEAR_LINE_REMAINDER}")?;
         }
-        print!("\x1b[{}A", meter_channels.len()); // Hop back up to channel
+
+        let channel_count = meter_channels.len();
+        write!(self.stdout, "{ESCAPE}{channel_count}{MOVE_CURSOR_UP_LINES}")?;
+        Ok(())
     }
 
-    pub fn flush(&self) {
-        //TODO: Dont ignore this error
-        io::stdout().flush().unwrap();
+    pub fn flush(&mut self) -> UIResult {
+        self.stdout.flush()?;
+        Ok(())
     }
 
-    pub fn deactivate(self) -> Result<(), UIError> {
-        //TODO: Dont ignore this error
-        set_termios(self.file_descriptor, &self.original_termios)?;
-        print!("\x1b[2J"); // Clear screen
-        print!("\x1b[1;1H"); // Position cursor at the top left
-        print!("\x1b[?25h"); // Show cursor
+    pub fn deactivate(mut self) -> UIResult {
+        set_termios(&mut self.stdout, &self.original_termios)?;
+        write!(self.stdout, "{ESCAPE}{CLEAR_SCREEN}")?;
+        write!(self.stdout, "{ESCAPE}{MOVE_CURSOR_UPPER_LEFT}")?;
+        write!(self.stdout, "{ESCAPE}{SHOW_CURSOR}")?;
+        Ok(())
+    }
+}
+
+fn read_current_termios(stdout: &io::Stdout) -> io::Result<Termios> {
+    unsafe {
+        let mut termios = MaybeUninit::uninit();
+        let result = tcgetattr(stdout.as_raw_fd(), termios.as_mut_ptr());
+        if result < 0 {
+            return Err(io::Error::last_os_error());
+        }
+        Ok(termios.assume_init())
+    }
+}
+
+fn set_termios(stdout: &mut io::Stdout, termios: &Termios) -> io::Result<()> {
+    unsafe {
+        let result = tcsetattr(stdout.as_raw_fd(), termios::TCSAFLUSH, termios);
+        if result < 0 {
+            return Err(io::Error::last_os_error());
+        }
         Ok(())
     }
 }
@@ -126,25 +167,4 @@ fn enable_raw_mode(termios: &mut Termios) {
     // Disabling INPCK, ISTRIP, and enabling CS8 are traditionally part of
     // setting up "raw terminal output". However, this aleady seems to be
     // the case for Terminal.app
-}
-
-fn read_current_termios(file_descriptor: i32) -> Result<Termios, io::Error> {
-    unsafe {
-        let mut termios = MaybeUninit::uninit();
-        let result = tcgetattr(file_descriptor, termios.as_mut_ptr());
-        if result < 0 {
-            return Err(io::Error::last_os_error());
-        }
-        Ok(termios.assume_init())
-    }
-}
-
-fn set_termios(file_descriptor: i32, termios: &Termios) -> Result<(), io::Error> {
-    unsafe {
-        let result = tcsetattr(file_descriptor, termios::TCSAFLUSH, termios);
-        if result < 0 {
-            return Err(io::Error::last_os_error());
-        }
-        Ok(())
-    }
 }

@@ -10,6 +10,8 @@
 // TODO: Use kAudioFilePropertyFormatList to deal with multi format files?
 // TODO: Query the files channel layout to handle multi channel files?
 // TODO: Check we dont orphan threads from one file to the next.
+//
+// TODO: Figure out where returning a result is over complicated vs a panic
 
 // TODO: Test with channel count > 2 (figure out how we want to support this)
 // It looks like we might be able to read kAudioFilePropertyChannelLayout and
@@ -34,8 +36,6 @@ use std::fmt;
 use events::{Event, EventError};
 use player::{AudioFilePlayer, PlaybackError};
 use ui::{TerminalUI, UIError};
-
-use ffi::kqueue as kq;
 
 //TODO: Disable UI tick whilst paused?
 const UI_TICK_DURATION_MICROSECONDS: i64 = 33333;
@@ -106,11 +106,9 @@ impl fmt::Display for AfqueueError {
     }
 }
 
+//TODO: Make this a bit less nested
 fn start(paths: impl IntoIterator<Item = String>) -> Result<(), AfqueueError> {
-    //TODO: Use stdin raw file descriptor instead?
-    let stdin_fd = kq::STDIN_FILE_NUM as i32;
-
-    let ui = TerminalUI::activate(stdin_fd)?;
+    let mut ui = TerminalUI::activate()?;
 
     //TODO: Pass in file descriptor to build_event_queue
     let (event_sender, mut event_reader) = events::build_event_queue()?;
@@ -120,7 +118,6 @@ fn start(paths: impl IntoIterator<Item = String>) -> Result<(), AfqueueError> {
     let mut exit_requested = false;
 
     for path in paths {
-
         if exit_requested {
             break;
         }
@@ -129,8 +126,8 @@ fn start(paths: impl IntoIterator<Item = String>) -> Result<(), AfqueueError> {
 
         let metadata = player.file_metadata()?;
 
-        ui.clear_screen();
-        ui.display_metadata(metadata);
+        ui.reset_screen();
+        ui.display_metadata(&metadata);
 
         player.start_playback()?;
 
@@ -166,7 +163,7 @@ fn start(paths: impl IntoIterator<Item = String>) -> Result<(), AfqueueError> {
     }
     event_reader.close()?;
 
-    //TODO: Ensure this get called if playback fails
+    //TODO: Ensure this get called if playback fails, use drop?
     ui.deactivate()?;
     Ok(())
 }
