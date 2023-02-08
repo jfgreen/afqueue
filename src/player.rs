@@ -207,7 +207,7 @@ impl AudioFilePlayer {
 impl Drop for AudioFilePlayer {
     fn drop(&mut self) {
         // Rebox the state so it gets dropped
-        let _state = unsafe { Box::from_raw(self.state_ptr) };
+        let _state = unsafe { Box::from_raw(self.state_ptr as *mut PlaybackState) };
     }
 }
 
