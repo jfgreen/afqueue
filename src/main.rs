@@ -126,8 +126,8 @@ fn start(paths: impl IntoIterator<Item = String>) -> Result<(), AfqueueError> {
 
         let metadata = player.file_metadata()?;
 
-        ui.reset_screen();
-        ui.display_metadata(&metadata);
+        ui.reset_screen()?;
+        ui.display_metadata(&metadata)?;
 
         player.start_playback()?;
 
@@ -151,8 +151,8 @@ fn start(paths: impl IntoIterator<Item = String>) -> Result<(), AfqueueError> {
                 }
                 Event::UITick => {
                     let meter_channels = player.get_meter_level()?;
-                    ui.display_meter(meter_channels);
-                    ui.flush();
+                    ui.display_meter(meter_channels)?;
+                    ui.flush()?;
                     //TODO: Deduct time spent updating UI?
                     event_reader.enable_ui_timer_event(UI_TICK_DURATION_MICROSECONDS)?;
                 }

@@ -45,41 +45,43 @@ impl fmt::Display for UIError {
 
 type UIResult = Result<(), UIError>;
 
-pub struct TerminalUI {
-    stdout: io::Stdout,
+pub struct TerminalUI<'a> {
+    stdout_fd: i32,
+    handle: io::StdoutLock<'a>,
     original_termios: Termios,
 }
 
-impl TerminalUI {
+impl<'a> TerminalUI<'a> {
     pub fn activate() -> Result<Self, UIError> {
-        //TODO: try locking stdout
-        let mut stdout = io::stdout();
+        let stdout = io::stdout();
+        let mut handle = stdout.lock();
+        let stdout_fd = stdout.as_raw_fd();
 
-        let mut termios = read_current_termios(&stdout)?;
-
+        let mut termios = read_current_termios(stdout_fd)?;
         let original_termios = termios;
         enable_raw_mode(&mut termios);
 
-        set_termios(&mut stdout, &termios)?;
+        set_termios(stdout_fd, &termios)?;
 
-        write!(stdout, "{ESCAPE}{HIDE_CURSOR}")?;
+        write!(handle, "{ESCAPE}{HIDE_CURSOR}")?;
 
         Ok(TerminalUI {
-            stdout,
+            stdout_fd,
+            handle,
             original_termios,
         })
     }
 
     pub fn reset_screen(&mut self) -> UIResult {
-        write!(self.stdout, "{ESCAPE}{CLEAR_SCREEN}")?;
-        write!(self.stdout, "{ESCAPE}{MOVE_CURSOR_UPPER_LEFT}")?;
+        write!(self.handle, "{ESCAPE}{CLEAR_SCREEN}")?;
+        write!(self.handle, "{ESCAPE}{MOVE_CURSOR_UPPER_LEFT}")?;
         Ok(())
     }
 
     pub fn display_metadata(&mut self, metadata: &[(String, String)]) -> UIResult {
-        write!(self.stdout, "Properties:{NEW_LINE}")?;
+        write!(self.handle, "Properties:{NEW_LINE}")?;
         for (k, v) in metadata {
-            write!(self.stdout, "{k}: {v}{NEW_LINE}")?;
+            write!(self.handle, "{k}: {v}{NEW_LINE}")?;
         }
         Ok(())
     }
@@ -90,36 +92,36 @@ impl TerminalUI {
 
         for channel_power in meter_channels.iter() {
             let bar_length = (max_bar_length * channel_power) as usize;
-            write!(self.stdout, "{NEW_LINE}")?;
+            write!(self.handle, "{NEW_LINE}")?;
             for _ in 0..bar_length {
-                write!(self.stdout, "█")?;
+                write!(self.handle, "█")?;
             }
-            write!(self.stdout, "{ESCAPE}{CLEAR_LINE_REMAINDER}")?;
+            write!(self.handle, "{ESCAPE}{CLEAR_LINE_REMAINDER}")?;
         }
 
         let channel_count = meter_channels.len();
-        write!(self.stdout, "{ESCAPE}{channel_count}{MOVE_CURSOR_UP_LINES}")?;
+        write!(self.handle, "{ESCAPE}{channel_count}{MOVE_CURSOR_UP_LINES}")?;
         Ok(())
     }
 
     pub fn flush(&mut self) -> UIResult {
-        self.stdout.flush()?;
+        self.handle.flush()?;
         Ok(())
     }
 
     pub fn deactivate(mut self) -> UIResult {
-        set_termios(&mut self.stdout, &self.original_termios)?;
-        write!(self.stdout, "{ESCAPE}{CLEAR_SCREEN}")?;
-        write!(self.stdout, "{ESCAPE}{MOVE_CURSOR_UPPER_LEFT}")?;
-        write!(self.stdout, "{ESCAPE}{SHOW_CURSOR}")?;
+        set_termios(self.stdout_fd, &self.original_termios)?;
+        write!(self.handle, "{ESCAPE}{CLEAR_SCREEN}")?;
+        write!(self.handle, "{ESCAPE}{MOVE_CURSOR_UPPER_LEFT}")?;
+        write!(self.handle, "{ESCAPE}{SHOW_CURSOR}")?;
         Ok(())
     }
 }
 
-fn read_current_termios(stdout: &io::Stdout) -> io::Result<Termios> {
+fn read_current_termios(file_descriptor: i32) -> io::Result<Termios> {
     unsafe {
         let mut termios = MaybeUninit::uninit();
-        let result = tcgetattr(stdout.as_raw_fd(), termios.as_mut_ptr());
+        let result = tcgetattr(file_descriptor, termios.as_mut_ptr());
         if result < 0 {
             return Err(io::Error::last_os_error());
         }
@@ -127,9 +129,9 @@ fn read_current_termios(stdout: &io::Stdout) -> io::Result<Termios> {
     }
 }
 
-fn set_termios(stdout: &mut io::Stdout, termios: &Termios) -> io::Result<()> {
+fn set_termios(file_descriptor: i32, termios: &Termios) -> io::Result<()> {
     unsafe {
-        let result = tcsetattr(stdout.as_raw_fd(), termios::TCSAFLUSH, termios);
+        let result = tcsetattr(file_descriptor, termios::TCSAFLUSH, termios);
         if result < 0 {
             return Err(io::Error::last_os_error());
         }
