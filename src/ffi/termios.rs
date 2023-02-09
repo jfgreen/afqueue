@@ -2,17 +2,17 @@
 
 //TODO: Document termios stuff
 
-use std::ffi::{c_char, c_ulong};
+use std::ffi::{c_int, c_uchar, c_ulong};
 
 #[link(name = "c")]
 extern "C" {
-    pub fn tcgetattr(descriptor: i32, termios: *mut Termios) -> i32;
-    pub fn tcsetattr(descriptor: i32, optional_actions: i32, termios: *const Termios) -> i32;
+    pub fn tcgetattr(descriptor: c_int, termios: *mut Termios) -> c_int;
+    pub fn tcsetattr(descriptor: c_int, optional_actions: c_int, termios: *const Termios) -> c_int;
 }
 
-pub type TCFlag = c_ulong;
-pub type CC = c_char;
-pub type Speed = c_ulong;
+pub type TCFlagT = c_ulong;
+pub type CCT = c_uchar;
+pub type SpeedT = c_ulong;
 
 /// Size of the `c_cc` control chars array.
 pub const NCCS: usize = 20;
@@ -21,44 +21,44 @@ pub const NCCS: usize = 20;
 #[derive(Copy, Clone, Default, Debug)]
 pub struct Termios {
     /// input flags
-    pub c_iflag: TCFlag,
+    pub c_iflag: TCFlagT,
     /// output flags
-    pub c_oflag: TCFlag,
+    pub c_oflag: TCFlagT,
     /// control flags
-    pub c_cflag: TCFlag,
+    pub c_cflag: TCFlagT,
     /// local flags
-    pub c_lflag: TCFlag,
+    pub c_lflag: TCFlagT,
     /// control chars
-    pub c_cc: [CC; NCCS],
+    pub c_cc: [CCT; NCCS],
     /// input speed
-    pub c_ispeed: Speed,
+    pub c_ispeed: SpeedT,
     /// output speed
-    pub c_ospeed: Speed,
+    pub c_ospeed: SpeedT,
 }
 
 /// Enable echoing
-pub const ECHO: TCFlag = 0x00000008;
+pub const ECHO: TCFlagT = 0x00000008;
 
 /// Canonicalize input lines (edit and submit input line by line)
-pub const ICANON: TCFlag = 0x00000100;
+pub const ICANON: TCFlagT = 0x00000100;
 
 /// Translate interupt, quit and suspend characters into corresponding signals
-pub const ISIG: TCFlag = 0x00000080;
+pub const ISIG: TCFlagT = 0x00000080;
 
 /// Enable output flow control
-pub const IXON: TCFlag = 0x00000200;
+pub const IXON: TCFlagT = 0x00000200;
 
 /// Enable extended input procesing
-pub const IEXTEN: TCFlag = 0x00000400;
+pub const IEXTEN: TCFlagT = 0x00000400;
 
 /// Enable translation of carriage returns to newlines
-pub const ICRNL: TCFlag = 0x00000100;
+pub const ICRNL: TCFlagT = 0x00000100;
 
 /// Enable output post processing
-pub const OPOST: TCFlag = 0x00000001;
+pub const OPOST: TCFlagT = 0x00000001;
 
 /// Enable sending SIGINT on break
-pub const BRKINT: TCFlag = 0x00000002;
+pub const BRKINT: TCFlagT = 0x00000002;
 
 /// Drain output, flush input
-pub const TCSAFLUSH: i32 = 2;
+pub const TCSAFLUSH: c_int = 2;
