@@ -153,13 +153,12 @@ fn start(paths: impl IntoIterator<Item = String>) -> Result<(), AfqueueError> {
                     let meter_channels = player.get_meter_level()?;
                     ui.display_meter(meter_channels)?;
                     ui.flush()?;
-                    //TODO: Deduct time spent updating UI?
+                    //TODO: Figure out propper timestep that takes into account time spent updating
+                    // UI, and general timer inaccuracy
                     event_reader.enable_ui_timer_event(UI_TICK_DURATION_MICROSECONDS)?;
                 }
             }
         }
-        // Reset the playback finished event for re-use if there is another file to play
-        event_reader.enable_playback_finished_event()?;
     }
     event_reader.close()?;
 

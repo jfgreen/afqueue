@@ -131,36 +131,6 @@ impl Receiver {
         }
     }
 
-    pub fn enable_playback_finished_event(&mut self) -> Result<(), EventError> {
-        unsafe {
-            let playback_finished_event = Kevent {
-                ident: AUDIO_QUEUE_PLAYBACK_FINISHED,
-                filter: kq::EVFILT_USER,
-                flags: kq::EV_ENABLE,
-                fflags: 0,
-                data: 0,
-                udata: 0,
-            };
-
-            let changelist = [playback_finished_event];
-
-            let result = kevent(
-                self.queue,
-                changelist.as_ptr(),
-                changelist.len() as i32,
-                ptr::null_mut(),
-                0,
-                ptr::null(),
-            );
-
-            if result < 0 {
-                let io_err = io::Error::last_os_error();
-                return Err(EventError::Enable(io_err));
-            }
-            Ok(())
-        }
-    }
-
     pub fn enable_ui_timer_event(&mut self, usec: i64) -> Result<(), EventError> {
         unsafe {
             let ui_timer_event = Kevent {
@@ -228,16 +198,13 @@ pub fn build_event_queue() -> Result<(Sender, Receiver), EventError> {
         };
 
         // TODO: Maybe using a unique ident per file along with a EV_ONESHOT would be
-        // easier?
+        // easier? i.e using udata to signal the audio queue thats stopped
 
         // Describe the playback finished events we are interested in
-        // TODO: Increase confidence in using kqueue from one song to the next by using
-        // udata to signal the audio queue thats stopped
         let playback_finished_event = Kevent {
             ident: AUDIO_QUEUE_PLAYBACK_FINISHED,
             filter: kq::EVFILT_USER,
-            flags: kq::EV_ADD | kq::EV_DISPATCH | kq::EV_CLEAR,
-            //flags:kq::EV_ADD | kq::EV_ONESHOT | kq::EV_ENABLE,
+            flags: kq::EV_ADD | kq::EV_CLEAR,
             fflags: 0,
             data: 0,
             udata: 0,
