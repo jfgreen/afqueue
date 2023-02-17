@@ -11,7 +11,7 @@ extern "C" {
 }
 
 pub type TCFlagT = c_ulong;
-pub type CCT = c_uchar;
+pub type Cct = c_uchar;
 pub type SpeedT = c_ulong;
 
 /// Size of the `c_cc` control chars array.
@@ -29,7 +29,7 @@ pub struct Termios {
     /// local flags
     pub c_lflag: TCFlagT,
     /// control chars
-    pub c_cc: [CCT; NCCS],
+    pub c_cc: [Cct; NCCS],
     /// input speed
     pub c_ispeed: SpeedT,
     /// output speed
