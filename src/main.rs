@@ -158,6 +158,13 @@ fn start(paths: impl IntoIterator<Item = String>) -> Result<(), AfqueueError> {
                     // UI, and general timer inaccuracy
                     event_reader.enable_ui_timer_event(UI_TICK_DURATION_MICROSECONDS)?;
                 }
+                Event::TerminalResized => {
+                    //TODO: Make UI hold on to current metadata/state, resize current bar
+                    //TODO: Make UI trim metadata if too long
+                    ui.update_size()?;
+                    ui.reset_screen()?;
+                    ui.display_metadata(&metadata)?;
+                }
             }
         }
     }

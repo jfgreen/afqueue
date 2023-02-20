@@ -3,6 +3,7 @@
 use std::ffi::c_void;
 
 //TODO: Doc all the kqueue stuff
+//TODO: Make more use of std::ffi c types
 
 pub type Kqueue = i32;
 
@@ -28,6 +29,7 @@ extern "C" {
 pub const EVFILT_READ: i16 = -1;
 pub const EVFILT_TIMER: i16 = -7;
 pub const EVFILT_USER: i16 = -10;
+pub const EVFILT_SIGNAL: i16 = -6;
 pub const EV_ADD: u16 = 0x1;
 pub const EV_ENABLE: u16 = 0x4;
 pub const EV_ONESHOT: u16 = 0x10;
@@ -36,6 +38,7 @@ pub const NOTE_TRIGGER: u32 = 0x01000000;
 pub const NOTE_USECONDS: u32 = 0x00000002;
 
 pub const STDIN_FILE_NUM: u64 = 0;
+pub const SIGWINCH: u64 = 28;
 
 #[derive(Debug)]
 #[repr(C)]

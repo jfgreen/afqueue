@@ -83,6 +83,11 @@ impl<'a> TerminalUI<'a> {
         Ok(())
     }
 
+    pub fn update_size(&mut self) -> UIResult {
+        self.size = read_term_size(self.stdout_fd)?;
+        Ok(())
+    }
+
     pub fn display_metadata(&mut self, metadata: &[(String, String)]) -> UIResult {
         write!(self.handle, "Properties:{NEW_LINE}")?;
         for (k, v) in metadata {

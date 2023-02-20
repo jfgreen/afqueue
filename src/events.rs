@@ -48,6 +48,7 @@ pub enum Event {
     ExitKeyPressed,
     AudioQueueStopped,
     UITick,
+    TerminalResized,
 }
 
 #[derive(Clone)]
@@ -126,6 +127,7 @@ impl Receiver {
                     return Event::AudioQueueStopped
                 }
                 (UI_TIMER_TICK, kq::EVFILT_TIMER) => return Event::UITick,
+                (kq::SIGWINCH, kq::EVFILT_SIGNAL) => return Event::TerminalResized,
                 _ => continue,
             }
         }
@@ -179,15 +181,17 @@ impl Receiver {
 // to follow
 pub fn build_event_queue() -> Result<(Sender, Receiver), EventError> {
     unsafe {
+        // Create a new Kqueue
         let kqueue = kqueue();
         if kqueue < 0 {
             let io_err = io::Error::last_os_error();
             return Err(EventError::Create(io_err));
         }
 
-        // TODO: See if EV_ENABLE is actually needed?
+        // Describe the events we are interested in...
 
-        // Describe the stdin events we are interested in
+        // New input available on stdin
+        // TODO: See if EV_ENABLE is actually needed?
         let stdin_event = Kevent {
             ident: kq::STDIN_FILE_NUM,
             filter: kq::EVFILT_READ,
@@ -200,7 +204,7 @@ pub fn build_event_queue() -> Result<(Sender, Receiver), EventError> {
         // TODO: Maybe using a unique ident per file along with a EV_ONESHOT would be
         // easier? i.e using udata to signal the audio queue thats stopped
 
-        // Describe the playback finished events we are interested in
+        // End of audio queue playback
         let playback_finished_event = Kevent {
             ident: AUDIO_QUEUE_PLAYBACK_FINISHED,
             filter: kq::EVFILT_USER,
@@ -210,9 +214,19 @@ pub fn build_event_queue() -> Result<(Sender, Receiver), EventError> {
             udata: 0,
         };
 
-        let changelist = [stdin_event, playback_finished_event];
+        // Terminal resizing
+        let terminal_resized_event = Kevent {
+            ident: kq::SIGWINCH,
+            filter: kq::EVFILT_SIGNAL,
+            flags: kq::EV_ADD,
+            fflags: 0,
+            data: 0,
+            udata: 0,
+        };
 
-        // Register interest in both events
+        // Register interest in all events
+        let changelist = [stdin_event, terminal_resized_event, playback_finished_event];
+
         let result = kevent(
             kqueue,
             changelist.as_ptr(),
