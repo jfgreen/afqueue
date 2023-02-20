@@ -23,6 +23,7 @@
 mod ffi {
     pub mod audio_toolbox;
     pub mod core_foundation;
+    pub mod ioctl;
     pub mod kqueue;
     pub mod termios;
 }
@@ -47,7 +48,7 @@ fn main() {
     let args = env::args();
     let audio_file_paths = parse_args(args);
     start(audio_file_paths).unwrap_or_else(|err| {
-        println!("Failed to playback files");
+        println!("Failed to playback file(s)");
         println!("{err}");
         process::exit(1);
     });

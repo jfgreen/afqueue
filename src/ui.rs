@@ -4,6 +4,7 @@ use std::os::fd::AsRawFd;
 
 use std::mem::MaybeUninit;
 
+use crate::ffi::ioctl::{ioctl, WinSize, TIOCGWINSZ};
 use crate::ffi::termios::{self, tcgetattr, tcsetattr, Termios};
 
 // Terminal escape codes
@@ -37,7 +38,7 @@ impl fmt::Display for UIError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
             UIError::IO(err) => {
-                write!(f, "IO error interacting with termios: '{err}'")
+                write!(f, "IO error '{err}'")
             }
         }
     }
@@ -49,6 +50,7 @@ pub struct TerminalUI<'a> {
     stdout_fd: i32,
     handle: io::StdoutLock<'a>,
     original_termios: Termios,
+    size: WinSize,
 }
 
 impl<'a> TerminalUI<'a> {
@@ -63,12 +65,15 @@ impl<'a> TerminalUI<'a> {
 
         set_termios(stdout_fd, &termios)?;
 
+        let size = read_term_size(stdout_fd)?;
+
         write!(handle, "{ESCAPE}{HIDE_CURSOR}")?;
 
         Ok(TerminalUI {
             stdout_fd,
             handle,
             original_termios,
+            size,
         })
     }
 
@@ -87,8 +92,7 @@ impl<'a> TerminalUI<'a> {
     }
 
     pub fn display_meter(&mut self, meter_channels: Vec<f32>) -> UIResult {
-        //TODO: Get max bar length from term
-        let max_bar_length: f32 = 100.0;
+        let max_bar_length = self.size.ws_col as f32;
 
         for channel_power in meter_channels.iter() {
             let bar_length = (max_bar_length * channel_power) as usize;
@@ -136,6 +140,19 @@ fn set_termios(file_descriptor: i32, termios: &Termios) -> io::Result<()> {
             return Err(io::Error::last_os_error());
         }
         Ok(())
+    }
+}
+
+fn read_term_size(file_descriptor: i32) -> io::Result<WinSize> {
+    unsafe {
+        let mut win_size = MaybeUninit::uninit();
+
+        let result = ioctl(file_descriptor, TIOCGWINSZ, win_size.as_mut_ptr());
+
+        if result < 0 {
+            return Err(io::Error::last_os_error());
+        }
+        Ok(win_size.assume_init())
     }
 }
 
