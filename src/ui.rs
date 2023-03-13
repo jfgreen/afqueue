@@ -9,6 +9,8 @@ use crate::ffi::termios::{self, tcgetattr, tcsetattr, Termios};
 
 // Terminal escape codes
 const ESCAPE: &str = "\x1b[";
+const AUTOWRAP_ENABLE: &str = "?7h";
+const AUTOWRAP_DISABLE: &str = "?7l";
 const HIDE_CURSOR: &str = "?25l";
 const SHOW_CURSOR: &str = "?25h";
 const CLEAR_SCREEN: &str = "2J";
@@ -18,9 +20,6 @@ const MOVE_CURSOR_UP_LINES: &str = "A";
 
 const NEW_LINE: &str = "\r\n";
 
-//TODO: Fix metering breaking on terminal resize
-//TODO: Maintain a lock on stdout?
-//TODO: Explore different meters
 //TODO: Colourised meter?
 
 #[derive(Debug)]
@@ -68,6 +67,7 @@ impl<'a> TerminalUI<'a> {
         let size = read_term_size(stdout_fd)?;
 
         write!(handle, "{ESCAPE}{HIDE_CURSOR}")?;
+        write!(handle, "{ESCAPE}{AUTOWRAP_DISABLE}")?;
 
         Ok(TerminalUI {
             stdout_fd,
@@ -89,9 +89,11 @@ impl<'a> TerminalUI<'a> {
     }
 
     pub fn display_metadata(&mut self, metadata: &[(String, String)]) -> UIResult {
-        write!(self.handle, "Properties:{NEW_LINE}")?;
+        write!(self.handle, "Properties:")?;
+        write!(self.handle, "{NEW_LINE}")?;
         for (k, v) in metadata {
-            write!(self.handle, "{k}: {v}{NEW_LINE}")?;
+            write!(self.handle, "{k}: {v}")?;
+            write!(self.handle, "{NEW_LINE}")?;
         }
         Ok(())
     }
@@ -123,6 +125,7 @@ impl<'a> TerminalUI<'a> {
         write!(self.handle, "{ESCAPE}{CLEAR_SCREEN}")?;
         write!(self.handle, "{ESCAPE}{MOVE_CURSOR_UPPER_LEFT}")?;
         write!(self.handle, "{ESCAPE}{SHOW_CURSOR}")?;
+        write!(self.handle, "{ESCAPE}{AUTOWRAP_ENABLE}")?;
         Ok(())
     }
 }
