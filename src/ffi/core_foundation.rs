@@ -106,15 +106,19 @@ extern "C" {
 
     /// Get the length of a string in UTF-16 code units.
     ///
+    /// Note: Due to how UTF-16 employs surrogate pairs, what is visually
+    /// rendered as a single character might be more than one code unit.
+    ///
     /// For example:
     ///  - "tree" -> 4
     ///  - "🍊tree" -> 6
     ///  - "𐑐" -> 2
+    ///  - "🧘🏻‍♂️" -> 7
     #[link_name = "CFStringGetLength"]
     pub fn cfstring_get_length(string_ref: CFStringRef) -> CFIndex;
 
-    /// Extract a range of characters from a CFString into a buffer using a
-    /// specified encoding.
+    /// Extract a range of UTF-16 code units from a CFString into a buffer using
+    /// a specified encoding.
     ///
     /// For the Core Foundation string referenced by the `string_ref` parameter,
     /// extract the range of characters specified by `range`, into `buffer`
