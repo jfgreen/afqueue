@@ -108,7 +108,6 @@ pub struct AudioFilePlayer {
     output_queue: AudioQueueRef,
     state_ptr: *mut c_void,
     channel_count: usize,
-    paused: bool,
 }
 
 impl AudioFilePlayer {
@@ -176,13 +175,13 @@ impl AudioFilePlayer {
         Ok(())
     }
 
-    pub fn toggle_paused(&mut self) -> PlaybackResult<()> {
-        if self.paused {
-            audio_queue_start(self.output_queue)?;
-        } else {
-            audio_queue_pause(self.output_queue)?;
-        }
-        self.paused = !self.paused;
+    pub fn pause(&mut self) -> PlaybackResult<()> {
+        audio_queue_pause(self.output_queue)?;
+        Ok(())
+    }
+
+    pub fn resume(&mut self) -> PlaybackResult<()> {
+        audio_queue_start(self.output_queue)?;
         Ok(())
     }
 

@@ -114,8 +114,6 @@ fn start(paths: impl IntoIterator<Item = String>) -> Result<(), AfqueueError> {
     //TODO: Pass in file descriptor to build_event_queue
     let (event_sender, mut event_reader) = events::build_event_queue()?;
 
-    event_reader.enable_ui_timer_event(UI_TICK_DURATION_MICROSECONDS)?;
-
     let mut exit_requested = false;
 
     for path in paths {
@@ -124,6 +122,7 @@ fn start(paths: impl IntoIterator<Item = String>) -> Result<(), AfqueueError> {
         }
 
         let mut player = AudioFilePlayer::initialise(&path, event_sender.clone())?;
+        let mut paused = false;
 
         let metadata = player.file_metadata()?;
 
@@ -132,12 +131,22 @@ fn start(paths: impl IntoIterator<Item = String>) -> Result<(), AfqueueError> {
 
         player.start_playback()?;
 
+        event_reader.enable_ui_timer_event(UI_TICK_DURATION_MICROSECONDS)?;
+
         'event_loop: loop {
             let event = event_reader.next();
 
             match event {
                 Event::PauseKeyPressed => {
-                    player.toggle_paused()?;
+                    if paused {
+                        player.resume()?;
+                        //TODO: Minus time since last tick?
+                        event_reader.enable_ui_timer_event(UI_TICK_DURATION_MICROSECONDS)?;
+                    } else {
+                        player.pause()?;
+                        event_reader.disable_ui_timer_event()?;
+                    }
+                    paused = !paused;
                 }
                 Event::NextTrackKeyPressed => {
                     player.stop()?;
@@ -147,10 +156,17 @@ fn start(paths: impl IntoIterator<Item = String>) -> Result<(), AfqueueError> {
                     exit_requested = true;
                 }
                 Event::AudioQueueStopped => {
+                    //TODO: Is event_reader that accurate a name?
+                    event_reader.disable_ui_timer_event()?;
                     player.close()?;
                     break 'event_loop;
                 }
                 Event::UITick => {
+                    // NOTE: This UI tick event might happen in between a user requested
+                    // player.stop() being invoked and the queue actually stopping
+                    // (i.e an AudioQueueStopped event)
+                    // We are going to assume that this wont cause a problem.
+
                     let meter_channels = player.get_meter_level()?;
                     ui.display_meter(meter_channels)?;
                     ui.flush()?;

@@ -163,6 +163,36 @@ impl Receiver {
         }
     }
 
+    pub fn disable_ui_timer_event(&mut self) -> Result<(), EventError> {
+        unsafe {
+            let ui_timer_event = Kevent {
+                ident: UI_TIMER_TICK,
+                filter: kq::EVFILT_TIMER,
+                flags: kq::EV_DELETE,
+                fflags: 0,
+                data: 0,
+                udata: 0,
+            };
+
+            let changelist = [ui_timer_event];
+
+            let result = kevent(
+                self.queue,
+                changelist.as_ptr(),
+                changelist.len() as i32,
+                ptr::null_mut(),
+                0,
+                ptr::null(),
+            );
+
+            if result < 0 {
+                let io_err = io::Error::last_os_error();
+                return Err(EventError::Enable(io_err));
+            }
+            Ok(())
+        }
+    }
+
     pub fn close(self) -> Result<(), EventError> {
         //TODO: Could this be drop instead?
         unsafe {
