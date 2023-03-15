@@ -1,0 +1,14 @@
+Rename to something fun.
+Write a readme.
+Make VU meter an optional feature that can be toggled on and off.
+Display playback time.
+Show currently playing filename.
+Show the queued up files.
+Display player state (i.e when paused).
+Add some cool little animation.
+Display keybindings when the user presses '?' or simmilar.
+Allow seeking within a song.
+Rework input processing to allow arrow keys to be used.
+Rethink key mapping.
+Configurable playback volume.
+Keep on top of tech debt / todos / rough edges.
