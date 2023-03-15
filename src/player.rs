@@ -161,7 +161,6 @@ impl AudioFilePlayer {
             output_queue,
             state_ptr,
             channel_count,
-            paused: false,
         })
     }
 

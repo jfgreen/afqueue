@@ -124,14 +124,17 @@ fn start(paths: impl IntoIterator<Item = String>) -> Result<(), AfqueueError> {
         let mut player = AudioFilePlayer::initialise(&path, event_sender.clone())?;
         let mut paused = false;
 
+        //TODO: Is there a way of making enabling and disabling the timer using
+        // idempotent operations so we dont have to track if we have set it or not?
+        event_reader.enable_ui_timer_event(UI_TICK_DURATION_MICROSECONDS)?;
+        let mut timer_set = true;
+
         let metadata = player.file_metadata()?;
 
         ui.reset_screen()?;
         ui.display_metadata(&metadata)?;
 
         player.start_playback()?;
-
-        event_reader.enable_ui_timer_event(UI_TICK_DURATION_MICROSECONDS)?;
 
         'event_loop: loop {
             let event = event_reader.next();
@@ -142,9 +145,11 @@ fn start(paths: impl IntoIterator<Item = String>) -> Result<(), AfqueueError> {
                         player.resume()?;
                         //TODO: Minus time since last tick?
                         event_reader.enable_ui_timer_event(UI_TICK_DURATION_MICROSECONDS)?;
+                        timer_set = true;
                     } else {
                         player.pause()?;
                         event_reader.disable_ui_timer_event()?;
+                        timer_set = false;
                     }
                     paused = !paused;
                 }
@@ -157,7 +162,10 @@ fn start(paths: impl IntoIterator<Item = String>) -> Result<(), AfqueueError> {
                 }
                 Event::AudioQueueStopped => {
                     //TODO: Is event_reader that accurate a name?
-                    event_reader.disable_ui_timer_event()?;
+                    if timer_set {
+                        event_reader.disable_ui_timer_event()?;
+                    }
+
                     player.close()?;
                     break 'event_loop;
                 }
@@ -173,6 +181,7 @@ fn start(paths: impl IntoIterator<Item = String>) -> Result<(), AfqueueError> {
                     //TODO: Figure out propper timestep that takes into account time spent updating
                     // UI, and general timer inaccuracy
                     event_reader.enable_ui_timer_event(UI_TICK_DURATION_MICROSECONDS)?;
+                    timer_set = true;
                 }
                 Event::TerminalResized => {
                     //TODO: Make UI hold on to current metadata/state, resize current bar
