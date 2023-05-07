@@ -224,7 +224,19 @@ impl AudioFileReader {
 
         let format = audio_file_read_basic_description(audio_file)?;
         let max_packet_size = audio_file_read_packet_size_upper_bound(audio_file)?;
-        let buffer_size = calculate_buffer_size(&format, max_packet_size);
+
+        let buffer_size = if format.frames_per_packet != 0 {
+            // If frames per packet are known, tailor the buffer size.
+            let frames = format.sample_rate * BUFFER_SECONDS_HINT;
+            let packets = (frames / (format.frames_per_packet as f64)).ceil() as u32;
+            let size = packets * max_packet_size;
+            let size = cmp::max(size, LOWER_BUFFER_SIZE_HINT);
+            cmp::min(size, UPPER_BUFFER_SIZE_HINT)
+        } else {
+            // If frames per packet is not known, fallback to something large enough
+            cmp::max(max_packet_size, UPPER_BUFFER_SIZE_HINT)
+        };
+
         let is_vbr = format.bytes_per_packet == 0 || format.frames_per_packet == 0;
         let packets_per_buffer = buffer_size / max_packet_size;
 
@@ -242,6 +254,56 @@ impl AudioFileReader {
 
     pub fn file_metadata(&self) -> PlaybackResult<Vec<(String, String)>> {
         audio_file_read_metadata(self.playback_file).map_err(|e| e.into())
+    }
+
+    fn handle_buffer(&mut self, audio_queue: AudioQueueRef, buffer: AudioQueueBufferRef) {
+        if self.finished {
+            return;
+        }
+
+        let read_result = audio_file_read_packet_data(
+            self.playback_file,
+            self.current_packet,
+            self.packets_per_buffer,
+            buffer,
+            self.is_vbr,
+        );
+
+        let packets_read = match read_result {
+            //TODO: Report error properly
+            Ok(packets_read) => packets_read,
+            Err(error) => {
+                print!("oh no: {error}\r\n");
+                self.finished = true;
+                return;
+            }
+        };
+
+        if packets_read == 0 {
+            self.finished = true;
+            // Request an asynchronous stop so that buffered audio can finish playing.
+            // Queue stopping is detected via seperate callback to property listener.
+            //TODO: Handle and report Error
+            audio_queue_stop(audio_queue, false).expect("oh no");
+            return;
+        }
+
+        match audio_queue_enqueue_buffer(audio_queue, buffer) {
+            Ok(()) => {
+                self.current_packet += packets_read as i64;
+            }
+            // Attempting to enqueue during reset can be expected when the user
+            // has stopped the queue before playback has finished.
+            Err(SystemErrorCode(audio_toolbox::AUDIO_QUEUE_ERROR_ENQUEUE_DURING_RESET)) => {
+                self.finished = true;
+            }
+            // Anything else is probably a legitimate error condition
+            Err(SystemErrorCode(code)) => {
+                //TODO: Report error properly
+                print!("oh no: {code}\r\n");
+                self.finished = true;
+            }
+        }
     }
 }
 
@@ -280,54 +342,7 @@ extern "C" fn handle_buffer(
 ) {
     unsafe {
         let reader = &mut *(user_data as *mut AudioFileReader);
-
-        if reader.finished {
-            return;
-        }
-
-        let read_result = audio_file_read_packet_data(
-            reader.playback_file,
-            reader.current_packet,
-            reader.packets_per_buffer,
-            buffer,
-            reader.is_vbr,
-        );
-
-        let packets_read = match read_result {
-            //TODO: Report error properly
-            Ok(packets_read) => packets_read,
-            Err(error) => {
-                print!("oh no: {error}\r\n");
-                reader.finished = true;
-                return;
-            }
-        };
-
-        if packets_read == 0 {
-            reader.finished = true;
-            // Request an asynchronous stop so that buffered audio can finish playing.
-            // Queue stopping is detected via seperate callback to property listener.
-            //TODO: Handle and report Error
-            audio_queue_stop(audio_queue, false).expect("oh no");
-            return;
-        }
-
-        match audio_queue_enqueue_buffer(audio_queue, buffer) {
-            Ok(()) => {
-                reader.current_packet += packets_read as i64;
-            }
-            // Attempting to enqueue during reset can be expected when the user
-            // has stopped the queue before playback has finished.
-            Err(SystemErrorCode(audio_toolbox::AUDIO_QUEUE_ERROR_ENQUEUE_DURING_RESET)) => {
-                reader.finished = true;
-            }
-            // Anything else is probably a legitimate error condition
-            Err(SystemErrorCode(code)) => {
-                //TODO: Report error properly
-                print!("oh no: {code}\r\n");
-                reader.finished = true;
-            }
-        }
+        reader.handle_buffer(audio_queue, buffer);
     }
 }
 
@@ -361,18 +376,6 @@ fn calculate_buffer_size(
     format: &audio_toolbox::AudioStreamBasicDescription,
     max_packet_size: u32,
 ) -> u32 {
-    //TODO: Write some tests for this calculation (if we decide to keep it)
-    if format.frames_per_packet != 0 {
-        // If frames per packet are known, tailor the buffer size.
-        let frames = format.sample_rate * BUFFER_SECONDS_HINT;
-        let packets = (frames / (format.frames_per_packet as f64)).ceil() as u32;
-        let size = packets * max_packet_size;
-        let size = cmp::max(size, LOWER_BUFFER_SIZE_HINT);
-        cmp::min(size, UPPER_BUFFER_SIZE_HINT)
-    } else {
-        // If frames per packet is not known, fallback to something large enough
-        cmp::max(max_packet_size, UPPER_BUFFER_SIZE_HINT)
-    }
 }
 
 fn create_buffers(
@@ -435,7 +438,7 @@ fn audio_file_read_packet_data(
         }
 
         buffer.audio_data_byte_size = num_bytes;
-        buffer.packet_description_count = if is_vbr { 0 } else { num_packets };
+        buffer.packet_description_count = if is_vbr { num_packets } else { 0 };
 
         Ok(num_packets)
     }
