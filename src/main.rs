@@ -35,7 +35,7 @@ mod ui;
 use std::fmt;
 
 use events::{Event, EventError};
-use player::{AudioFilePlayer, PlaybackError};
+use player::{AudioFilePlayer, AudioFileReader, PlaybackError};
 use ui::{TerminalUI, UIError};
 
 //TODO: Disable UI tick whilst paused?
@@ -112,6 +112,7 @@ fn start(paths: impl IntoIterator<Item = String>) -> Result<(), AfqueueError> {
     let mut ui = TerminalUI::activate()?;
 
     //TODO: Pass in file descriptor to build_event_queue
+    //TODO: sender and reader are not that accurate names
     let (event_sender, mut event_reader) = events::build_event_queue()?;
 
     let mut exit_requested = false;
@@ -121,15 +122,15 @@ fn start(paths: impl IntoIterator<Item = String>) -> Result<(), AfqueueError> {
             break;
         }
 
-        let mut player = AudioFilePlayer::initialise(&path, event_sender.clone())?;
+        let mut reader = AudioFileReader::new(&path, event_sender.clone())?;
+        let metadata = reader.file_metadata()?;
+        let mut player = AudioFilePlayer::initialise(&mut reader)?;
         let mut paused = false;
 
         //TODO: Is there a way of making enabling and disabling the timer using
         // idempotent operations so we dont have to track if we have set it or not?
         event_reader.enable_ui_timer_event(UI_TICK_DURATION_MICROSECONDS)?;
         let mut timer_set = true;
-
-        let metadata = player.file_metadata()?;
 
         ui.reset_screen()?;
         ui.display_metadata(&metadata)?;
@@ -165,8 +166,6 @@ fn start(paths: impl IntoIterator<Item = String>) -> Result<(), AfqueueError> {
                     if timer_set {
                         event_reader.disable_ui_timer_event()?;
                     }
-
-                    player.close()?;
                     break 'event_loop;
                 }
                 Event::UITick => {
