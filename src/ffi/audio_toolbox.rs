@@ -1,5 +1,5 @@
 //! Selected FFI bindings to AudioToolbox.
-
+//!
 //! To facilitate cross referencing with macOS API documentation,
 //! types that cross the FFI boundary generally follow similar
 //! naming and type aliasing conventions to those found in the macOS SDK header
@@ -304,6 +304,7 @@ pub struct AudioTimeStamp {
 
 /// Represents the current meter level for a single channel of an audio queue
 #[repr(C)]
+#[derive(Default, Clone)]
 pub struct AudioQueueLevelMeterState {
     /// Average RMS power
     pub average_power: f32,

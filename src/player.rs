@@ -94,6 +94,19 @@ impl fmt::Display for PathError {
     }
 }
 
+pub struct MeterState(Box<[AudioQueueLevelMeterState]>);
+
+impl MeterState {
+    pub fn levels(&self) -> impl IntoIterator<Item = f32> + '_ {
+        self.0.iter().map(|channel| channel.average_power)
+    }
+
+    fn update(&mut self, output_queue: AudioQueueRef) -> PlaybackResult<()> {
+        audio_queue_read_meter_level(output_queue, &mut self.0)?;
+        Ok(())
+    }
+}
+
 type SystemResult<T> = Result<T, SystemErrorCode>;
 
 type PacketPosition = i64;
@@ -116,11 +129,12 @@ const BUFFER_COUNT: usize = 3;
 pub struct AudioFilePlayer<'a> {
     output_queue: AudioQueueRef,
     reader: PhantomData<&'a mut AudioFileReader>,
-    chan_count: usize,
 }
 
 impl<'a> AudioFilePlayer<'a> {
     pub fn initialise(reader: &'a mut AudioFileReader) -> PlaybackResult<Self> {
+        //TODO: Fix reader field envy... could something else create the queue and
+        // buffers?
         let reader_ptr = reader as *mut _ as *mut c_void;
 
         let output_queue = output_queue_create(&reader.format, reader_ptr)?;
@@ -153,12 +167,9 @@ impl<'a> AudioFilePlayer<'a> {
             handle_buffer(reader_ptr, output_queue, buffer_ref);
         }
 
-        let chan_count = reader.format.channels_per_frame as usize;
-
         Ok(AudioFilePlayer {
             output_queue,
             reader: PhantomData,
-            chan_count,
         })
     }
 
@@ -184,10 +195,8 @@ impl<'a> AudioFilePlayer<'a> {
         Ok(())
     }
 
-    //TODO: Pass in the vec so we can avoid the alloc each tick
-    pub fn get_meter_level(&self) -> PlaybackResult<Vec<f32>> {
-        let levels = audio_queue_read_meter_level(self.output_queue, self.chan_count)?;
-        Ok(levels.iter().map(|channel| channel.average_power).collect())
+    pub fn get_meter_level(&self, state: &mut MeterState) -> PlaybackResult<()> {
+        state.update(self.output_queue)
     }
 }
 
@@ -255,6 +264,18 @@ impl AudioFileReader {
     pub fn file_metadata(&self) -> PlaybackResult<Vec<(String, String)>> {
         audio_file_read_metadata(self.playback_file).map_err(|e| e.into())
     }
+
+    pub fn new_meter_state(&self) -> MeterState {
+        let default_meter = AudioQueueLevelMeterState::default();
+        let meter_count = self.format.channels_per_frame as usize;
+        let init_levels = vec![default_meter; meter_count];
+        MeterState(init_levels.into_boxed_slice())
+    }
+
+    // TODO: Introduce new playback state, pulled out onto above stack, i.e
+    // let file_reader = AudioFileReader(path);
+    // let playback_state = file_reader.new_playback_state();
+    // let playback = file_reader.new_playback(*const playback_state);
 
     fn handle_buffer(&mut self, audio_queue: AudioQueueRef, buffer: AudioQueueBufferRef) {
         if self.finished {
@@ -370,12 +391,6 @@ extern "C" fn handle_running_state_change(
             Err(error) => print!("booooo!: {error}\r\n"),
         }
     }
-}
-
-fn calculate_buffer_size(
-    format: &audio_toolbox::AudioStreamBasicDescription,
-    max_packet_size: u32,
-) -> u32 {
 }
 
 fn create_buffers(
@@ -792,15 +807,12 @@ fn audio_queue_enable_metering(queue: AudioQueueRef) -> SystemResult<()> {
 
 fn audio_queue_read_meter_level(
     queue: AudioQueueRef,
-    channel_count: usize,
-) -> SystemResult<Vec<AudioQueueLevelMeterState>> {
-    //TODO: Figure out how to return slice
-    //TODO: Extract audio_queue_get_property function for this and
-    // audio_queue_read_run_state. TODO: Support stereo
+    meter_state: &mut Box<[AudioQueueLevelMeterState]>,
+) -> SystemResult<()> {
+    //TODO: Figure out what happens when level_state is too big or too small
     unsafe {
-        //TODO: Avoid re-alloc on each read
-        let mut meter_state: Vec<AudioQueueLevelMeterState> = Vec::with_capacity(channel_count);
-        let expected_size = (mem::size_of::<AudioQueueLevelMeterState>() * channel_count) as u32;
+        let expected_size =
+            (mem::size_of::<AudioQueueLevelMeterState>() * meter_state.len()) as u32;
         let mut data_size = expected_size;
 
         let status = audio_toolbox::audio_queue_get_property(
@@ -815,9 +827,7 @@ fn audio_queue_read_meter_level(
         }
 
         assert!(data_size == expected_size);
-        meter_state.set_len(channel_count);
-
-        Ok(meter_state)
+        Ok(())
     }
 }
 

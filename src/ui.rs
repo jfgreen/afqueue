@@ -98,10 +98,12 @@ impl<'a> TerminalUI<'a> {
         Ok(())
     }
 
-    pub fn display_meter(&mut self, meter_channels: Vec<f32>) -> UIResult {
+    pub fn display_meter(&mut self, meter_channels: impl IntoIterator<Item = f32>) -> UIResult {
         let max_bar_length = self.size.ws_col as f32;
 
-        for channel_power in meter_channels.iter() {
+        let mut channel_count = 0;
+        for channel_power in meter_channels {
+            channel_count += 1;
             let bar_length = (max_bar_length * channel_power) as usize;
             write!(self.handle, "{NEW_LINE}")?;
             for _ in 0..bar_length {
@@ -110,7 +112,6 @@ impl<'a> TerminalUI<'a> {
             write!(self.handle, "{ESCAPE}{CLEAR_LINE_REMAINDER}")?;
         }
 
-        let channel_count = meter_channels.len();
         write!(self.handle, "{ESCAPE}{channel_count}{MOVE_CURSOR_UP_LINES}")?;
         Ok(())
     }

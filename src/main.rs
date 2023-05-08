@@ -123,6 +123,7 @@ fn start(paths: impl IntoIterator<Item = String>) -> Result<(), AfqueueError> {
         }
 
         let mut reader = AudioFileReader::new(&path, event_sender.clone())?;
+        let mut meter_state = reader.new_meter_state();
         let metadata = reader.file_metadata()?;
         let mut player = AudioFilePlayer::initialise(&mut reader)?;
         let mut paused = false;
@@ -174,8 +175,8 @@ fn start(paths: impl IntoIterator<Item = String>) -> Result<(), AfqueueError> {
                     // (i.e an AudioQueueStopped event)
                     // We are going to assume that this wont cause a problem.
 
-                    let meter_channels = player.get_meter_level()?;
-                    ui.display_meter(meter_channels)?;
+                    player.get_meter_level(&mut meter_state)?;
+                    ui.display_meter(meter_state.levels())?;
                     ui.flush()?;
                     //TODO: Figure out propper timestep that takes into account time spent updating
                     // UI, and general timer inaccuracy
