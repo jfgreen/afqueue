@@ -809,10 +809,9 @@ fn audio_queue_read_meter_level(
     queue: AudioQueueRef,
     meter_state: &mut Box<[AudioQueueLevelMeterState]>,
 ) -> SystemResult<()> {
-    //TODO: Figure out what happens when level_state is too big or too small
     unsafe {
-        let expected_size =
-            (mem::size_of::<AudioQueueLevelMeterState>() * meter_state.len()) as u32;
+        let meter_size = mem::size_of::<AudioQueueLevelMeterState>();
+        let expected_size = (meter_size * meter_state.len()) as u32;
         let mut data_size = expected_size;
 
         let status = audio_toolbox::audio_queue_get_property(

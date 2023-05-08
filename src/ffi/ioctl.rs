@@ -3,9 +3,6 @@
 //TODO: Document ioctl stuff
 
 use std::ffi::{c_int, c_ulong, c_ushort};
-use std::io;
-use std::mem::MaybeUninit;
-use std::os::fd::AsRawFd;
 
 // NOTE: At some point POSIX might add terminal size information to termios
 // For now, use ioctl instead
