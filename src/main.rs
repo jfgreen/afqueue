@@ -35,11 +35,11 @@ mod ui;
 use std::fmt;
 
 use events::{Event, EventError};
-use player::{AudioFilePlayer, AudioFileReader, PlaybackError};
+use player::{PlaybackContext, PlaybackError};
 use ui::{TerminalUI, UIError};
 
 //TODO: Disable UI tick whilst paused?
-const UI_TICK_DURATION_MICROSECONDS: i64 = 33333;
+const UI_TICK_DURATION_MICROSECONDS: i64 = 33333; // 30FPS
 
 use std::{env, process};
 
@@ -111,6 +111,9 @@ impl fmt::Display for AfqueueError {
 fn start(paths: impl IntoIterator<Item = String>) -> Result<(), AfqueueError> {
     let mut ui = TerminalUI::activate()?;
 
+    //TODO: Improve how errors after this point are reported..
+    // i.e stop UI, then print
+
     //TODO: Pass in file descriptor to build_event_queue
     //TODO: sender and reader are not that accurate names
     let (event_sender, mut event_reader) = events::build_event_queue()?;
@@ -122,10 +125,11 @@ fn start(paths: impl IntoIterator<Item = String>) -> Result<(), AfqueueError> {
             break;
         }
 
-        let mut reader = AudioFileReader::new(&path, event_sender.clone())?;
-        let mut meter_state = reader.new_meter_state();
-        let metadata = reader.file_metadata()?;
-        let mut player = AudioFilePlayer::initialise(&mut reader)?;
+        let context = PlaybackContext::new(&path)?;
+        let metadata = context.file_metadata()?;
+        let mut meter_state = context.new_meter_state();
+        let mut reader = context.new_audio_file_reader(event_sender.clone());
+        let mut player = context.new_audio_player(&mut reader)?;
         let mut paused = false;
 
         //TODO: Is there a way of making enabling and disabling the timer using

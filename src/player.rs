@@ -7,6 +7,7 @@ use std::mem::{self, MaybeUninit};
 use std::ptr;
 
 //TODO: Check for lots of inner loop allocs (i.e Vec::new or vec!)
+//TODO: Re-order
 
 use crate::ffi::audio_toolbox::{
     self, AudioFileID, AudioQueueBufferRef, AudioQueueLevelMeterState, AudioQueuePropertyID,
@@ -94,19 +95,6 @@ impl fmt::Display for PathError {
     }
 }
 
-pub struct MeterState(Box<[AudioQueueLevelMeterState]>);
-
-impl MeterState {
-    pub fn levels(&self) -> impl IntoIterator<Item = f32> + '_ {
-        self.0.iter().map(|channel| channel.average_power)
-    }
-
-    fn update(&mut self, output_queue: AudioQueueRef) -> PlaybackResult<()> {
-        audio_queue_read_meter_level(output_queue, &mut self.0)?;
-        Ok(())
-    }
-}
-
 type SystemResult<T> = Result<T, SystemErrorCode>;
 
 type PacketPosition = i64;
@@ -119,107 +107,16 @@ const UPPER_BUFFER_SIZE_HINT: u32 = 0x50000;
 const BUFFER_SECONDS_HINT: f64 = 0.5;
 const BUFFER_COUNT: usize = 3;
 
-// SAFETY: Although not immediately apparent from the fields in the
-// AudioFilePlayer struct, the output queue will internally hold a raw pointer
-// to `reader`. The output queue will use this pointer to mutate the reader as
-// it advances through the audio file a buffer at a time. Therefore the
-// PhantomData marker is used to enforce ownership of the reader for the
-// lifetime of the AudioFilePlayer. After which the output queue will have been
-// disposed of and reader _should_ be safe to access again.
-pub struct AudioFilePlayer<'a> {
-    output_queue: AudioQueueRef,
-    reader: PhantomData<&'a mut AudioFileReader>,
-}
-
-impl<'a> AudioFilePlayer<'a> {
-    pub fn initialise(reader: &'a mut AudioFileReader) -> PlaybackResult<Self> {
-        //TODO: Fix reader field envy... could something else create the queue and
-        // buffers?
-        let reader_ptr = reader as *mut _ as *mut c_void;
-
-        let output_queue = output_queue_create(&reader.format, reader_ptr)?;
-
-        //TODO: Push into reader? Or allocate without packet descriptions if not
-        // needed?
-        let packet_descriptions = match reader.is_vbr {
-            true => reader.packets_per_buffer,
-            false => 0,
-        };
-
-        let buffers = create_buffers(output_queue, packet_descriptions, reader.buffer_size)?;
-
-        // TODO: Push into reader?
-        if let Some(cookie) = audio_file_read_magic_cookie(reader.playback_file)? {
-            audio_queue_set_magic_cookie(output_queue, cookie)?
-        }
-
-        //TODO: Can we point to just event sender? Makes naming of reader a bit odd.
-        audio_queue_listen_to_run_state(output_queue, reader_ptr)?;
-
-        // While handle_buffer is usually invoked from the output queues internal
-        // callback thread to refill a buffer, we call it a few times before
-        // starting to pre load the buffers with audio. This means that any
-        // error during pre-buffering is not directly surfaced here, but
-        // reported back via the reader as an error event.
-
-        // For small files, some buffers might remain unused.
-        for buffer_ref in buffers {
-            handle_buffer(reader_ptr, output_queue, buffer_ref);
-        }
-
-        Ok(AudioFilePlayer {
-            output_queue,
-            reader: PhantomData,
-        })
-    }
-
-    pub fn start_playback(&mut self) -> PlaybackResult<()> {
-        audio_queue_enable_metering(self.output_queue)?;
-        audio_queue_start(self.output_queue)?;
-        Ok(())
-    }
-
-    pub fn pause(&mut self) -> PlaybackResult<()> {
-        audio_queue_pause(self.output_queue)?;
-        Ok(())
-    }
-
-    pub fn resume(&mut self) -> PlaybackResult<()> {
-        audio_queue_start(self.output_queue)?;
-        Ok(())
-    }
-
-    pub fn stop(&mut self) -> PlaybackResult<()> {
-        // Stop the queue synchronously
-        audio_queue_stop(self.output_queue, true)?;
-        Ok(())
-    }
-
-    pub fn get_meter_level(&self, state: &mut MeterState) -> PlaybackResult<()> {
-        state.update(self.output_queue)
-    }
-}
-
-impl<'a> Drop for AudioFilePlayer<'a> {
-    fn drop(&mut self) {
-        // Dispose of the queue synchronously
-        audio_queue_dispose(self.output_queue, true).expect("Failed to dispose of audio queue");
-    }
-}
-
-pub struct AudioFileReader {
+pub struct PlaybackContext {
     playback_file: AudioFileID,
     format: AudioStreamBasicDescription,
     buffer_size: u32,
     is_vbr: bool,
-    event_sender: events::Sender,
     packets_per_buffer: PacketCount,
-    current_packet: PacketPosition,
-    finished: bool,
 }
 
-impl AudioFileReader {
-    pub fn new(path: &str, event_sender: events::Sender) -> PlaybackResult<Self> {
+impl PlaybackContext {
+    pub fn new(path: &str) -> PlaybackResult<Self> {
         let path = cstring_path(path)?;
         let audio_file = audio_file_open(&path)?;
 
@@ -249,20 +146,67 @@ impl AudioFileReader {
         let is_vbr = format.bytes_per_packet == 0 || format.frames_per_packet == 0;
         let packets_per_buffer = buffer_size / max_packet_size;
 
-        Ok(AudioFileReader {
+        Ok(PlaybackContext {
             playback_file: audio_file,
             packets_per_buffer,
             format,
             buffer_size,
             is_vbr,
-            event_sender,
-            current_packet: 0,
-            finished: false,
         })
     }
 
     pub fn file_metadata(&self) -> PlaybackResult<Vec<(String, String)>> {
         audio_file_read_metadata(self.playback_file).map_err(|e| e.into())
+    }
+
+    //TODO: Rename AudioFileReader -> AudioBufferHandler?
+    pub fn new_audio_file_reader(&self, event_sender: events::Sender) -> AudioFileReader {
+        AudioFileReader {
+            playback_file: self.playback_file,
+            is_vbr: self.is_vbr,
+            event_sender,
+            packets_per_buffer: self.packets_per_buffer,
+            current_packet: 0,
+            finished: false,
+        }
+    }
+
+    pub fn new_audio_player<'a>(
+        &self,
+        reader: &'a mut AudioFileReader,
+    ) -> PlaybackResult<AudioFilePlayer<'a>> {
+        let reader_ptr = reader as *mut _ as *mut c_void;
+        let output_queue = output_queue_create(&self.format, reader_ptr)?;
+
+        let packet_descriptions = match self.is_vbr {
+            true => reader.packets_per_buffer,
+            false => 0,
+        };
+
+        let buffers = create_buffers(output_queue, packet_descriptions, self.buffer_size)?;
+
+        if let Some(cookie) = audio_file_read_magic_cookie(self.playback_file)? {
+            audio_queue_set_magic_cookie(output_queue, cookie)?
+        }
+
+        // TODO: Can we point to just event sender? Makes naming of reader a bit odd.
+        audio_queue_listen_to_run_state(output_queue, reader_ptr)?;
+
+        // TODO: Do this on start?
+        // While handle_buffer is usually invoked from the output queues internal
+        // callback thread to refill a buffer, we call it a few times before
+        // starting to pre load the buffers with audio. This means that any
+        // error during pre-buffering is not directly surfaced here, but
+        // reported back via the reader as an error event.
+        // For small files, some buffers might remain unused.
+        for buffer_ref in buffers {
+            handle_buffer(reader_ptr, output_queue, buffer_ref);
+        }
+
+        Ok(AudioFilePlayer {
+            output_queue,
+            reader: PhantomData,
+        })
     }
 
     pub fn new_meter_state(&self) -> MeterState {
@@ -271,12 +215,37 @@ impl AudioFileReader {
         let init_levels = vec![default_meter; meter_count];
         MeterState(init_levels.into_boxed_slice())
     }
+}
 
-    // TODO: Introduce new playback state, pulled out onto above stack, i.e
-    // let file_reader = AudioFileReader(path);
-    // let playback_state = file_reader.new_playback_state();
-    // let playback = file_reader.new_playback(*const playback_state);
+impl Drop for PlaybackContext {
+    fn drop(&mut self) {
+        audio_file_close(self.playback_file).expect("Failed to close audio file");
+    }
+}
 
+pub struct MeterState(Box<[AudioQueueLevelMeterState]>);
+
+impl MeterState {
+    pub fn levels(&self) -> impl IntoIterator<Item = f32> + '_ {
+        self.0.iter().map(|channel| channel.average_power)
+    }
+
+    fn update(&mut self, output_queue: AudioQueueRef) -> PlaybackResult<()> {
+        audio_queue_read_meter_level(output_queue, &mut self.0)?;
+        Ok(())
+    }
+}
+
+pub struct AudioFileReader {
+    playback_file: AudioFileID,
+    is_vbr: bool,
+    event_sender: events::Sender,
+    packets_per_buffer: PacketCount,
+    current_packet: PacketPosition,
+    finished: bool,
+}
+
+impl AudioFileReader {
     fn handle_buffer(&mut self, audio_queue: AudioQueueRef, buffer: AudioQueueBufferRef) {
         if self.finished {
             return;
@@ -328,9 +297,50 @@ impl AudioFileReader {
     }
 }
 
-impl Drop for AudioFileReader {
+// SAFETY: Although not immediately apparent from the fields in the
+// AudioFilePlayer struct, the output queue will internally hold a raw pointer
+// to `reader`. The output queue will use this pointer to mutate the reader as
+// it advances through the audio file a buffer at a time. Therefore the
+// PhantomData marker is used to enforce ownership of the reader for the
+// lifetime of the AudioFilePlayer. After which the output queue will have been
+// disposed of and reader _should_ be safe to access again.
+pub struct AudioFilePlayer<'a> {
+    output_queue: AudioQueueRef,
+    reader: PhantomData<&'a mut AudioFileReader>,
+}
+
+impl<'a> AudioFilePlayer<'a> {
+    pub fn start_playback(&mut self) -> PlaybackResult<()> {
+        audio_queue_enable_metering(self.output_queue)?;
+        audio_queue_start(self.output_queue)?;
+        Ok(())
+    }
+
+    pub fn pause(&mut self) -> PlaybackResult<()> {
+        audio_queue_pause(self.output_queue)?;
+        Ok(())
+    }
+
+    pub fn resume(&mut self) -> PlaybackResult<()> {
+        audio_queue_start(self.output_queue)?;
+        Ok(())
+    }
+
+    pub fn stop(&mut self) -> PlaybackResult<()> {
+        // Stop the queue synchronously
+        audio_queue_stop(self.output_queue, true)?;
+        Ok(())
+    }
+
+    pub fn get_meter_level(&self, state: &mut MeterState) -> PlaybackResult<()> {
+        state.update(self.output_queue)
+    }
+}
+
+impl<'a> Drop for AudioFilePlayer<'a> {
     fn drop(&mut self) {
-        audio_file_close(self.playback_file).expect("Failed to close audio file");
+        // Dispose of the queue synchronously
+        audio_queue_dispose(self.output_queue, true).expect("Failed to dispose of audio queue");
     }
 }
 
