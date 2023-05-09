@@ -105,6 +105,8 @@ const UPPER_BUFFER_SIZE_HINT: u32 = 0x50000;
 const BUFFER_SECONDS_HINT: f64 = 0.5;
 const BUFFER_COUNT: usize = 3;
 
+const AUDIO_QUEUE_RUN_STATE_STOPPED: u32 = 0;
+
 pub struct PlaybackContext {
     playback_file: AudioFileID,
     format: AudioStreamBasicDescription,
@@ -280,6 +282,19 @@ impl AudioBufferHandler {
             }
         }
     }
+
+    fn handle_running_state_change(&mut self, audio_queue: AudioQueueRef) {
+        match audio_queue_read_run_state(audio_queue) {
+            Ok(AUDIO_QUEUE_RUN_STATE_STOPPED) => {
+                self.event_sender
+                    .trigger_playback_finished_event()
+                    .expect("failed to trigger playback event");
+            }
+            Ok(_) => {} // Ignore the queue starting
+            //TODO: Feed back error to controller?
+            Err(error) => print!("booooo!: {error}\r\n"),
+        }
+    }
 }
 
 // SAFETY: Although not immediately apparent from the fields in the
@@ -380,25 +395,12 @@ extern "C" fn handle_running_state_change(
     audio_queue: AudioQueueRef,
     property: AudioQueuePropertyID,
 ) {
-    // This handler should only react to changes to the "is running" property
+    // The handler should only react to changes to the "is running" property
     assert!(property == audio_toolbox::AUDIO_QUEUE_PROPERTY_IS_RUNNING);
 
     unsafe {
         let handler = &mut *(user_data as *mut AudioBufferHandler);
-
-        match audio_queue_read_run_state(audio_queue) {
-            Ok(0) => {
-                // TODO: Push into handler
-                // TODO: Better error messaging
-                handler
-                    .event_sender
-                    .trigger_playback_finished_event()
-                    .expect("oh no");
-            }
-            Ok(_) => {} // Ignore the queue starting
-            //TODO: Feed back error to controller?
-            Err(error) => print!("booooo!: {error}\r\n"),
-        }
+        handler.handle_running_state_change(audio_queue);
     }
 }
 
