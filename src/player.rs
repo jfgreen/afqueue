@@ -7,26 +7,16 @@ use std::mem::{self, MaybeUninit};
 use std::ptr;
 
 //TODO: Check for lots of inner loop allocs (i.e Vec::new or vec!)
-//TODO: Re-order
 
 use crate::ffi::audio_toolbox::{
     self, AudioFileID, AudioQueueBufferRef, AudioQueueLevelMeterState, AudioQueuePropertyID,
     AudioQueueRef, AudioStreamBasicDescription,
 };
 
+use crate::events;
 use crate::ffi::core_foundation;
 
-use crate::events;
-
-#[derive(Debug)]
-pub struct SystemErrorCode(i32);
-
-impl fmt::Display for SystemErrorCode {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        let SystemErrorCode(code) = self;
-        write!(f, "{code}")
-    }
-}
+pub type PlaybackResult<T> = Result<T, PlaybackError>;
 
 #[derive(Debug)]
 pub enum PlaybackError {
@@ -43,7 +33,7 @@ impl From<PathError> for PlaybackError {
 
 impl From<SystemErrorCode> for PlaybackError {
     fn from(err: SystemErrorCode) -> PlaybackError {
-        // TODO: Map error codes to enum variants
+        // TODO: Map common error codes to enum variants
         PlaybackError::System(err)
     }
 }
@@ -97,10 +87,18 @@ impl fmt::Display for PathError {
 
 type SystemResult<T> = Result<T, SystemErrorCode>;
 
+#[derive(Debug)]
+pub struct SystemErrorCode(i32);
+
+impl fmt::Display for SystemErrorCode {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        let SystemErrorCode(code) = self;
+        write!(f, "{code}")
+    }
+}
+
 type PacketPosition = i64;
 type PacketCount = u32;
-
-pub type PlaybackResult<T> = Result<T, PlaybackError>;
 
 const LOWER_BUFFER_SIZE_HINT: u32 = 0x4000;
 const UPPER_BUFFER_SIZE_HINT: u32 = 0x50000;
@@ -189,6 +187,7 @@ impl PlaybackContext {
         }
 
         // TODO: Can we point to just event sender? Makes naming of handler a bit odd.
+        // Or rename BufferHandler to ???
         audio_queue_listen_to_run_state(output_queue, handler_ptr)?;
 
         // TODO: Do this on start?
@@ -219,19 +218,6 @@ impl PlaybackContext {
 impl Drop for PlaybackContext {
     fn drop(&mut self) {
         audio_file_close(self.playback_file).expect("Failed to close audio file");
-    }
-}
-
-pub struct MeterState(Box<[AudioQueueLevelMeterState]>);
-
-impl MeterState {
-    pub fn levels(&self) -> impl IntoIterator<Item = f32> + '_ {
-        self.0.iter().map(|channel| channel.average_power)
-    }
-
-    fn update(&mut self, output_queue: AudioQueueRef) -> PlaybackResult<()> {
-        audio_queue_read_meter_level(output_queue, &mut self.0)?;
-        Ok(())
     }
 }
 
@@ -343,6 +329,19 @@ impl<'a> Drop for AudioFilePlayer<'a> {
     }
 }
 
+pub struct MeterState(Box<[AudioQueueLevelMeterState]>);
+
+impl MeterState {
+    pub fn levels(&self) -> impl IntoIterator<Item = f32> + '_ {
+        self.0.iter().map(|channel| channel.average_power)
+    }
+
+    fn update(&mut self, output_queue: AudioQueueRef) -> PlaybackResult<()> {
+        audio_queue_read_meter_level(output_queue, &mut self.0)?;
+        Ok(())
+    }
+}
+
 // TODO: Should always we ask for more packets than buffer can hold to ensure
 // the buffer gets fully used?
 //
@@ -363,7 +362,7 @@ impl<'a> Drop for AudioFilePlayer<'a> {
 
 // This handler assumes `buffer` adheres to several invarients:
 // - Is at least `packets_per_buffer` big
-// - Were allocated with packet descriptions
+// - Was allocated with packet descriptions (if needed)
 // - Belong to `audio_queue`
 extern "C" fn handle_buffer(
     user_data: *mut c_void,
@@ -389,6 +388,7 @@ extern "C" fn handle_running_state_change(
 
         match audio_queue_read_run_state(audio_queue) {
             Ok(0) => {
+                // TODO: Push into handler
                 // TODO: Better error messaging
                 handler
                     .event_sender
@@ -429,6 +429,13 @@ fn create_buffers(
     }
 }
 
+fn cstring_path(path: &str) -> Result<CString, PathError> {
+    if path.is_empty() {
+        return Err(PathError::PathIsEmpty);
+    }
+
+    Ok(CString::new(path)?)
+}
 fn audio_file_read_packet_data(
     file: AudioFileID,
     from_packet: PacketPosition,
@@ -466,14 +473,6 @@ fn audio_file_read_packet_data(
 
         Ok(num_packets)
     }
-}
-
-fn cstring_path(path: &str) -> Result<CString, PathError> {
-    if path.is_empty() {
-        return Err(PathError::PathIsEmpty);
-    }
-
-    Ok(CString::new(path)?)
 }
 
 fn audio_file_open(path: &CStr) -> SystemResult<AudioFileID> {
