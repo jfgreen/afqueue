@@ -159,9 +159,8 @@ impl PlaybackContext {
         audio_file_read_metadata(self.playback_file).map_err(|e| e.into())
     }
 
-    //TODO: Rename AudioFileReader -> AudioBufferHandler?
-    pub fn new_audio_file_reader(&self, event_sender: events::Sender) -> AudioFileReader {
-        AudioFileReader {
+    pub fn new_audio_buffer_handler(&self, event_sender: events::Sender) -> AudioBufferHandler {
+        AudioBufferHandler {
             playback_file: self.playback_file,
             is_vbr: self.is_vbr,
             event_sender,
@@ -173,13 +172,13 @@ impl PlaybackContext {
 
     pub fn new_audio_player<'a>(
         &self,
-        reader: &'a mut AudioFileReader,
+        handler: &'a mut AudioBufferHandler,
     ) -> PlaybackResult<AudioFilePlayer<'a>> {
-        let reader_ptr = reader as *mut _ as *mut c_void;
-        let output_queue = output_queue_create(&self.format, reader_ptr)?;
+        let handler_ptr = handler as *mut _ as *mut c_void;
+        let output_queue = output_queue_create(&self.format, handler_ptr)?;
 
         let packet_descriptions = match self.is_vbr {
-            true => reader.packets_per_buffer,
+            true => self.packets_per_buffer,
             false => 0,
         };
 
@@ -189,23 +188,23 @@ impl PlaybackContext {
             audio_queue_set_magic_cookie(output_queue, cookie)?
         }
 
-        // TODO: Can we point to just event sender? Makes naming of reader a bit odd.
-        audio_queue_listen_to_run_state(output_queue, reader_ptr)?;
+        // TODO: Can we point to just event sender? Makes naming of handler a bit odd.
+        audio_queue_listen_to_run_state(output_queue, handler_ptr)?;
 
         // TODO: Do this on start?
         // While handle_buffer is usually invoked from the output queues internal
         // callback thread to refill a buffer, we call it a few times before
         // starting to pre load the buffers with audio. This means that any
         // error during pre-buffering is not directly surfaced here, but
-        // reported back via the reader as an error event.
+        // reported back via the handler as an error event.
         // For small files, some buffers might remain unused.
         for buffer_ref in buffers {
-            handle_buffer(reader_ptr, output_queue, buffer_ref);
+            handle_buffer(handler_ptr, output_queue, buffer_ref);
         }
 
         Ok(AudioFilePlayer {
             output_queue,
-            reader: PhantomData,
+            handler: PhantomData,
         })
     }
 
@@ -236,7 +235,7 @@ impl MeterState {
     }
 }
 
-pub struct AudioFileReader {
+pub struct AudioBufferHandler {
     playback_file: AudioFileID,
     is_vbr: bool,
     event_sender: events::Sender,
@@ -245,7 +244,7 @@ pub struct AudioFileReader {
     finished: bool,
 }
 
-impl AudioFileReader {
+impl AudioBufferHandler {
     fn handle_buffer(&mut self, audio_queue: AudioQueueRef, buffer: AudioQueueBufferRef) {
         if self.finished {
             return;
@@ -299,14 +298,14 @@ impl AudioFileReader {
 
 // SAFETY: Although not immediately apparent from the fields in the
 // AudioFilePlayer struct, the output queue will internally hold a raw pointer
-// to `reader`. The output queue will use this pointer to mutate the reader as
+// to `handler`. The output queue will use this pointer to mutate the handler as
 // it advances through the audio file a buffer at a time. Therefore the
-// PhantomData marker is used to enforce ownership of the reader for the
+// PhantomData marker is used to enforce ownership of the handler for the
 // lifetime of the AudioFilePlayer. After which the output queue will have been
-// disposed of and reader _should_ be safe to access again.
+// disposed of and handler _should_ be safe to access again.
 pub struct AudioFilePlayer<'a> {
     output_queue: AudioQueueRef,
-    reader: PhantomData<&'a mut AudioFileReader>,
+    handler: PhantomData<&'a mut AudioBufferHandler>,
 }
 
 impl<'a> AudioFilePlayer<'a> {
@@ -372,8 +371,8 @@ extern "C" fn handle_buffer(
     buffer: AudioQueueBufferRef,
 ) {
     unsafe {
-        let reader = &mut *(user_data as *mut AudioFileReader);
-        reader.handle_buffer(audio_queue, buffer);
+        let handler = &mut *(user_data as *mut AudioBufferHandler);
+        handler.handle_buffer(audio_queue, buffer);
     }
 }
 
@@ -386,12 +385,12 @@ extern "C" fn handle_running_state_change(
     assert!(property == audio_toolbox::AUDIO_QUEUE_PROPERTY_IS_RUNNING);
 
     unsafe {
-        let reader = &mut *(user_data as *mut AudioFileReader);
+        let handler = &mut *(user_data as *mut AudioBufferHandler);
 
         match audio_queue_read_run_state(audio_queue) {
             Ok(0) => {
                 // TODO: Better error messaging
-                reader
+                handler
                     .event_sender
                     .trigger_playback_finished_event()
                     .expect("oh no");

@@ -128,8 +128,8 @@ fn start(paths: impl IntoIterator<Item = String>) -> Result<(), AfqueueError> {
         let context = PlaybackContext::new(&path)?;
         let metadata = context.file_metadata()?;
         let mut meter_state = context.new_meter_state();
-        let mut reader = context.new_audio_file_reader(event_sender.clone());
-        let mut player = context.new_audio_player(&mut reader)?;
+        let mut handler = context.new_audio_buffer_handler(event_sender.clone());
+        let mut player = context.new_audio_player(&mut handler)?;
         let mut paused = false;
 
         //TODO: Is there a way of making enabling and disabling the timer using
