@@ -159,8 +159,8 @@ impl PlaybackContext {
         audio_file_read_metadata(self.playback_file).map_err(|e| e.into())
     }
 
-    pub fn new_audio_buffer_handler(&self, event_sender: events::Sender) -> AudioBufferHandler {
-        AudioBufferHandler {
+    pub fn new_audio_callback_handler(&self, event_sender: events::Sender) -> AudioCallbackHandler {
+        AudioCallbackHandler {
             playback_file: self.playback_file,
             is_vbr: self.is_vbr,
             event_sender,
@@ -172,7 +172,7 @@ impl PlaybackContext {
 
     pub fn new_audio_player<'a>(
         &self,
-        handler: &'a mut AudioBufferHandler,
+        handler: &'a mut AudioCallbackHandler,
     ) -> PlaybackResult<AudioFilePlayer<'a>> {
         let handler_ptr = handler as *mut _ as *mut c_void;
         let output_queue = output_queue_create(&self.format, handler_ptr)?;
@@ -188,8 +188,6 @@ impl PlaybackContext {
             audio_queue_set_magic_cookie(output_queue, cookie)?
         }
 
-        // TODO: Can we point to just event sender? Makes naming of handler a bit odd.
-        // Or rename BufferHandler to ???
         audio_queue_listen_to_run_state(output_queue, handler_ptr)?;
 
         // TODO: Do this on start?
@@ -223,7 +221,7 @@ impl Drop for PlaybackContext {
     }
 }
 
-pub struct AudioBufferHandler {
+pub struct AudioCallbackHandler {
     playback_file: AudioFileID,
     is_vbr: bool,
     event_sender: events::Sender,
@@ -232,7 +230,7 @@ pub struct AudioBufferHandler {
     finished: bool,
 }
 
-impl AudioBufferHandler {
+impl AudioCallbackHandler {
     fn handle_buffer(&mut self, audio_queue: AudioQueueRef, buffer: AudioQueueBufferRef) {
         if self.finished {
             return;
@@ -306,7 +304,7 @@ impl AudioBufferHandler {
 // disposed of and handler _should_ be safe to access again.
 pub struct AudioFilePlayer<'a> {
     output_queue: AudioQueueRef,
-    handler: PhantomData<&'a mut AudioBufferHandler>,
+    handler: PhantomData<&'a mut AudioCallbackHandler>,
 }
 
 impl<'a> AudioFilePlayer<'a> {
@@ -373,8 +371,6 @@ impl MeterState {
 // The queue could continue to callback with remaining buffers.
 // Avoid unnecessary attempts to read the file again.
 
-// TODO: Handle errors properly, send back to main thread somehow?
-
 // This handler assumes `buffer` adheres to several invarients:
 // - Is at least `packets_per_buffer` big
 // - Was allocated with packet descriptions (if needed)
@@ -385,7 +381,7 @@ extern "C" fn handle_buffer(
     buffer: AudioQueueBufferRef,
 ) {
     unsafe {
-        let handler = &mut *(user_data as *mut AudioBufferHandler);
+        let handler = &mut *(user_data as *mut AudioCallbackHandler);
         handler.handle_buffer(audio_queue, buffer);
     }
 }
@@ -399,7 +395,7 @@ extern "C" fn handle_running_state_change(
     assert!(property == audio_toolbox::AUDIO_QUEUE_PROPERTY_IS_RUNNING);
 
     unsafe {
-        let handler = &mut *(user_data as *mut AudioBufferHandler);
+        let handler = &mut *(user_data as *mut AudioCallbackHandler);
         handler.handle_running_state_change(audio_queue);
     }
 }

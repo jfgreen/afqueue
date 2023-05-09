@@ -128,7 +128,7 @@ fn start(paths: impl IntoIterator<Item = String>) -> Result<(), AfqueueError> {
         let context = PlaybackContext::new(&path)?;
         let metadata = context.file_metadata()?;
         let mut meter_state = context.new_meter_state();
-        let mut handler = context.new_audio_buffer_handler(event_sender.clone());
+        let mut handler = context.new_audio_callback_handler(event_sender.clone());
         let mut player = context.new_audio_player(&mut handler)?;
         let mut paused = false;
 
