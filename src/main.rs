@@ -138,6 +138,7 @@ fn start(paths: impl IntoIterator<Item = String>) -> Result<(), AfqueueError> {
         let mut timer_set = true;
 
         ui.reset_screen()?;
+        ui.display_filename(&path)?;
         ui.display_metadata(&metadata)?;
 
         player.start_playback()?;
@@ -189,9 +190,9 @@ fn start(paths: impl IntoIterator<Item = String>) -> Result<(), AfqueueError> {
                 }
                 Event::TerminalResized => {
                     //TODO: Make UI hold on to current metadata/state, resize current bar
-                    //TODO: Make UI trim metadata if too long
                     ui.update_size()?;
                     ui.reset_screen()?;
+                    ui.display_filename(&path)?;
                     ui.display_metadata(&metadata)?;
                 }
             }

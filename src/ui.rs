@@ -88,6 +88,12 @@ impl<'a> TerminalUI<'a> {
         Ok(())
     }
 
+    pub fn display_filename(&mut self, filename: &str) -> UIResult {
+        write!(self.handle, "Playing: {}", filename)?;
+        write!(self.handle, "{NEW_LINE}")?;
+        Ok(())
+    }
+
     pub fn display_metadata(&mut self, metadata: &[(String, String)]) -> UIResult {
         write!(self.handle, "Properties:")?;
         write!(self.handle, "{NEW_LINE}")?;
@@ -127,6 +133,7 @@ impl<'a> TerminalUI<'a> {
         write!(self.handle, "{ESCAPE}{MOVE_CURSOR_UPPER_LEFT}")?;
         write!(self.handle, "{ESCAPE}{SHOW_CURSOR}")?;
         write!(self.handle, "{ESCAPE}{AUTOWRAP_ENABLE}")?;
+        self.handle.flush()?;
         Ok(())
     }
 }
