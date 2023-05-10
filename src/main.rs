@@ -41,6 +41,8 @@ use ui::{TerminalUI, UIError};
 //TODO: Disable UI tick whilst paused?
 const UI_TICK_DURATION_MICROSECONDS: i64 = 33333; // 30FPS
 
+const GAIN_INCREMENT: f32 = 0.1f32; //TODO: Will this get funky with FP maths?
+
 use std::{env, process};
 
 /// Playback a list of files passed in via command line arguments
@@ -131,6 +133,7 @@ fn start(paths: impl IntoIterator<Item = String>) -> Result<(), AfqueueError> {
         let mut handler = context.new_audio_callback_handler(event_sender.clone());
         let mut player = context.new_audio_player(&mut handler)?;
         let mut paused = false;
+        let mut gain = 1.0f32;
 
         //TODO: Is there a way of making enabling and disabling the timer using
         // idempotent operations so we dont have to track if we have set it or not?
@@ -142,6 +145,7 @@ fn start(paths: impl IntoIterator<Item = String>) -> Result<(), AfqueueError> {
         ui.display_metadata(&metadata)?;
 
         player.start_playback()?;
+        player.set_volume(gain);
 
         'event_loop: loop {
             let event = event_reader.next();
@@ -159,6 +163,14 @@ fn start(paths: impl IntoIterator<Item = String>) -> Result<(), AfqueueError> {
                         timer_set = false;
                     }
                     paused = !paused;
+                }
+                Event::VolumeDownKeyPressed => {
+                    gain -= GAIN_INCREMENT;
+                    player.set_volume(gain)?;
+                }
+                Event::VolumeUpKeyPressed => {
+                    gain += GAIN_INCREMENT;
+                    player.set_volume(gain)?;
                 }
                 Event::NextTrackKeyPressed => {
                     player.stop()?;

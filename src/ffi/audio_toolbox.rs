@@ -24,11 +24,19 @@ pub type AudioFilePropertyID = u32;
 /// Constant value identifying an audio queue property.
 pub type AudioQueuePropertyID = u32;
 
+/// Constant value identifying an audio queue parameter.
+pub type AudioQueueParameterID = u32;
+
+/// Value of an audio queue parameter.
+pub type AudioQueueParameterValue = f32;
+
 /// Determines if an audio file should be readable, writable or both.
 pub type AudioFilePermissions = i8;
 
 /// Used to indicate that an audio file should be read only.
 pub const AUDIO_FILE_READ_PERMISSION: i8 = 1;
+
+//TODO: Should the below constants use the above types?
 
 /// Constant used to interact with an audio files metadata.
 ///
@@ -97,6 +105,12 @@ pub const AUDIO_QUEUE_PROPERTY_ENABLE_LEVEL_METERING: u32 = u32::from_be_bytes(*
 /// `AudioQueueLevelMeterState` structs, with one struct per channel. Metering
 /// values in each struct will be normalised between 0 and 1.
 pub const AUDIO_QUEUE_PROPERTY_LEVEL_METER_STATE: u32 = u32::from_be_bytes(*b"aqmv");
+
+/// Constant used to control an audio queues relative volume.
+///
+/// The value of this property is on a linear scale from 0.0 (zero gain) to 1.0
+/// (unity gain).
+pub const AUDIO_QUEUE_PARAMETER_VOLUME: u32 = 1;
 
 /// Error returned when trying to enqueue on an audio queue that is resetting,
 /// stopping, or being disposed.
@@ -650,5 +664,18 @@ extern "C" {
         in_id: AudioQueuePropertyID,
         out_data: *mut c_void,
         io_data_size: *mut u32,
+    ) -> OSStatus;
+
+    /// Set an audio queue parameter.
+    ///
+    /// Set the parameter specified by `in_param_id` with the value `in_value`
+    /// for audio queue `in_aq`
+    ///
+    /// Returns an error on failure.
+    #[link_name = "AudioQueueSetParameter"]
+    pub fn audio_queue_set_parameter(
+        in_aq: AudioQueueRef,
+        in_param_id: AudioQueueParameterID,
+        in_value: AudioQueueParameterValue,
     ) -> OSStatus;
 }

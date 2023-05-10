@@ -330,6 +330,16 @@ impl<'a> AudioFilePlayer<'a> {
         Ok(())
     }
 
+    pub fn set_volume(&mut self, gain: f32) -> PlaybackResult<()> {
+        //TODO: Introduce gain type that enforces this invarient
+        // Keep gain in valid range
+        assert!(gain <= 1.0f32);
+        assert!(gain >= 0.0f32);
+
+        audio_queue_set_volume(self.output_queue, gain)?;
+        Ok(())
+    }
+
     pub fn get_meter_level(&self, state: &mut MeterState) -> PlaybackResult<()> {
         state.update(self.output_queue)
     }
@@ -434,6 +444,7 @@ fn cstring_path(path: &str) -> Result<CString, PathError> {
 
     Ok(CString::new(path)?)
 }
+
 fn audio_file_read_packet_data(
     file: AudioFileID,
     from_packet: PacketPosition,
@@ -789,6 +800,22 @@ fn audio_queue_read_run_state(queue: AudioQueueRef) -> SystemResult<u32> {
         assert!(data_size == mem::size_of::<u32>() as u32);
 
         Ok(data)
+    }
+}
+
+fn audio_queue_set_volume(queue: AudioQueueRef, gain: f32) -> SystemResult<()> {
+    unsafe {
+        let status = audio_toolbox::audio_queue_set_parameter(
+            queue,
+            audio_toolbox::AUDIO_QUEUE_PARAMETER_VOLUME,
+            gain,
+        );
+
+        if status == 0 {
+            Ok(())
+        } else {
+            Err(SystemErrorCode(status))
+        }
     }
 }
 

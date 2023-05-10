@@ -9,5 +9,5 @@ Display keybindings when the user presses '?' or simmilar.
 Allow seeking within a song.
 Rework input processing to allow arrow keys to be used.
 Rethink key mapping.
-Configurable playback volume.
+Display current playback volume.
 Keep on top of tech debt / todos / rough edges.

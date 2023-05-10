@@ -46,6 +46,8 @@ pub enum Event {
     NextTrackKeyPressed,
     PauseKeyPressed,
     ExitKeyPressed,
+    VolumeUpKeyPressed,
+    VolumeDownKeyPressed,
     AudioQueueStopped,
     UITick,
     TerminalResized,
@@ -111,6 +113,8 @@ impl Receiver {
                     'n' => return Event::NextTrackKeyPressed,
                     'q' => return Event::ExitKeyPressed,
                     'p' => return Event::PauseKeyPressed,
+                    ']' => return Event::VolumeUpKeyPressed,
+                    '[' => return Event::VolumeDownKeyPressed,
                     _ => continue,
                 }
             }
