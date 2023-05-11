@@ -330,9 +330,8 @@ impl<'a> AudioFilePlayer<'a> {
         Ok(())
     }
 
-    pub fn set_volume(&mut self, gain: f32) -> PlaybackResult<()> {
-        //TODO: Introduce gain type that enforces this invarient
-        // Keep gain in valid range
+    pub fn set_volume(&mut self, volume: &PlaybackVolume) -> PlaybackResult<()> {
+        let &PlaybackVolume(gain) = volume;
         assert!(gain <= 1.0f32);
         assert!(gain >= 0.0f32);
 
@@ -349,6 +348,32 @@ impl<'a> Drop for AudioFilePlayer<'a> {
     fn drop(&mut self) {
         // Dispose of the queue synchronously
         audio_queue_dispose(self.output_queue, true).expect("Failed to dispose of audio queue");
+    }
+}
+
+const GAIN_INCREMENT: f32 = 0.1f32;
+
+pub struct PlaybackVolume(f32);
+
+impl PlaybackVolume {
+    pub fn new() -> Self {
+        PlaybackVolume(1.0)
+    }
+
+    pub fn increment(&mut self) {
+        let mut next = self.0 + GAIN_INCREMENT;
+        if next > 1.0 {
+            next = 1.0;
+        }
+        self.0 = next;
+    }
+
+    pub fn decrement(&mut self) {
+        let mut next = self.0 - GAIN_INCREMENT;
+        if next < 0.0 {
+            next = 0.0;
+        }
+        self.0 = next;
     }
 }
 
