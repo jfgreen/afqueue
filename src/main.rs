@@ -35,7 +35,7 @@ mod ui;
 use std::fmt;
 
 use events::{Event, EventError};
-use player::{PlaybackContext, PlaybackError, PlaybackVolume};
+use player::{PlaybackContext, PlaybackError};
 use ui::{TerminalUI, UIError};
 
 //TODO: Disable UI tick whilst paused?
@@ -130,7 +130,6 @@ fn start(paths: impl IntoIterator<Item = String>) -> Result<(), AfqueueError> {
         let mut meter_state = context.new_meter_state();
         let mut handler = context.new_audio_callback_handler(event_sender.clone());
         let mut player = context.new_audio_player(&mut handler)?;
-        let mut volume = PlaybackVolume::new();
         let mut paused = false;
 
         //TODO: Is there a way of making enabling and disabling the timer using
@@ -143,7 +142,6 @@ fn start(paths: impl IntoIterator<Item = String>) -> Result<(), AfqueueError> {
         ui.display_metadata(&metadata)?;
 
         player.start_playback()?;
-        player.set_volume(&volume)?;
 
         'event_loop: loop {
             let event = event_reader.next();
@@ -163,12 +161,10 @@ fn start(paths: impl IntoIterator<Item = String>) -> Result<(), AfqueueError> {
                     paused = !paused;
                 }
                 Event::VolumeDownKeyPressed => {
-                    volume.decrement();
-                    player.set_volume(&volume)?;
+                    player.decrement_volume()?;
                 }
                 Event::VolumeUpKeyPressed => {
-                    volume.increment();
-                    player.set_volume(&volume)?;
+                    player.increment_volume()?;
                 }
                 Event::NextTrackKeyPressed => {
                     player.stop()?;

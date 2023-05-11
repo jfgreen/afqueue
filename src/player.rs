@@ -204,6 +204,7 @@ impl PlaybackContext {
         Ok(AudioFilePlayer {
             output_queue,
             handler: PhantomData,
+            volume : PlaybackVolume::new(),
         })
     }
 
@@ -305,6 +306,7 @@ impl AudioCallbackHandler {
 pub struct AudioFilePlayer<'a> {
     output_queue: AudioQueueRef,
     handler: PhantomData<&'a mut AudioCallbackHandler>,
+    volume: PlaybackVolume,
 }
 
 impl<'a> AudioFilePlayer<'a> {
@@ -330,11 +332,18 @@ impl<'a> AudioFilePlayer<'a> {
         Ok(())
     }
 
-    pub fn set_volume(&mut self, volume: &PlaybackVolume) -> PlaybackResult<()> {
-        let &PlaybackVolume(gain) = volume;
+    pub fn increment_volume(&mut self) -> PlaybackResult<()> {
+        self.volume.increment();
+        let PlaybackVolume(gain) = self.volume;
         assert!(gain <= 1.0f32);
-        assert!(gain >= 0.0f32);
+        audio_queue_set_volume(self.output_queue, gain)?;
+        Ok(())
+    }
 
+    pub fn decrement_volume(&mut self) -> PlaybackResult<()> {
+        self.volume.decrement();
+        let PlaybackVolume(gain) = self.volume;
+        assert!(gain >= 0.0f32);
         audio_queue_set_volume(self.output_queue, gain)?;
         Ok(())
     }
@@ -353,14 +362,14 @@ impl<'a> Drop for AudioFilePlayer<'a> {
 
 const GAIN_INCREMENT: f32 = 0.1f32;
 
-pub struct PlaybackVolume(f32);
+struct PlaybackVolume(f32);
 
 impl PlaybackVolume {
-    pub fn new() -> Self {
+    fn new() -> Self {
         PlaybackVolume(1.0)
     }
 
-    pub fn increment(&mut self) {
+    fn increment(&mut self) {
         let mut next = self.0 + GAIN_INCREMENT;
         if next > 1.0 {
             next = 1.0;
@@ -368,7 +377,7 @@ impl PlaybackVolume {
         self.0 = next;
     }
 
-    pub fn decrement(&mut self) {
+    fn decrement(&mut self) {
         let mut next = self.0 - GAIN_INCREMENT;
         if next < 0.0 {
             next = 0.0;
