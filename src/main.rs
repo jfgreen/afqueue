@@ -47,11 +47,23 @@ use std::{env, process};
 fn main() {
     let args = env::args();
     let audio_file_paths = parse_args(args);
-    start(audio_file_paths).unwrap_or_else(|err| {
-        println!("Failed to playback file(s)");
-        println!("{err}");
-        process::exit(1);
+
+    let mut ui = TerminalUI::activate().unwrap_or_else(|err| {
+        println!("Failed to activate UI, {err}");
+        process::exit(1)
     });
+
+    let playback_result = start(audio_file_paths, &mut ui);
+
+    // We are much more likely to get a playback error than a UI error, so we try
+    // and deactive the UI first so playback errors can be printed normally
+    ui.deactivate()
+        .expect("Deactivating UI should succeed, given it activated OK");
+
+    if let Err(err) = playback_result {
+        println!("Failed to playback files, {err}");
+        process::exit(1)
+    }
 }
 
 /// Parse arguments or print help message if supplied invalid input.
@@ -108,12 +120,7 @@ impl fmt::Display for AfqueueError {
 }
 
 //TODO: Make this a bit less nested
-fn start(paths: impl IntoIterator<Item = String>) -> Result<(), AfqueueError> {
-    let mut ui = TerminalUI::activate()?;
-
-    //TODO: Improve how errors after this point are reported..
-    // i.e stop UI, then print
-
+fn start(paths: impl IntoIterator<Item = String>, ui: &mut TerminalUI) -> Result<(), AfqueueError> {
     //TODO: Pass in file descriptor to build_event_queue
     //TODO: sender and reader are not that accurate names
     let (event_sender, mut event_reader) = events::build_event_queue()?;
@@ -131,6 +138,8 @@ fn start(paths: impl IntoIterator<Item = String>) -> Result<(), AfqueueError> {
         let mut handler = context.new_audio_callback_handler(event_sender.clone());
         let mut player = context.new_audio_player(&mut handler)?;
         let mut paused = false;
+
+        //TODO: Persist volume across files
 
         //TODO: Is there a way of making enabling and disabling the timer using
         // idempotent operations so we dont have to track if we have set it or not?
@@ -205,8 +214,5 @@ fn start(paths: impl IntoIterator<Item = String>) -> Result<(), AfqueueError> {
         }
     }
     event_reader.close()?;
-
-    //TODO: Ensure this get called if playback fails, use drop?
-    ui.deactivate()?;
     Ok(())
 }
