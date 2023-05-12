@@ -19,7 +19,7 @@ mod ui;
 use std::fmt;
 
 use events::{Event, EventError};
-use player::{PlaybackContext, PlaybackError};
+use player::{PlaybackContext, PlaybackError, PlaybackVolume};
 use ui::{TerminalUI, UIError};
 
 //TODO: Disable UI tick whilst paused?
@@ -111,6 +111,8 @@ fn start(paths: impl IntoIterator<Item = String>, ui: &mut TerminalUI) -> Result
 
     let mut exit_requested = false;
 
+    let mut volume = PlaybackVolume::new();
+
     for path in paths {
         if exit_requested {
             break;
@@ -123,8 +125,6 @@ fn start(paths: impl IntoIterator<Item = String>, ui: &mut TerminalUI) -> Result
         let mut player = context.new_audio_player(&mut handler)?;
         let mut paused = false;
 
-        //TODO: Persist volume across files
-
         //TODO: Is there a way of making enabling and disabling the timer using
         // idempotent operations so we dont have to track if we have set it or not?
         event_reader.enable_ui_timer_event(UI_TICK_DURATION_MICROSECONDS)?;
@@ -134,6 +134,7 @@ fn start(paths: impl IntoIterator<Item = String>, ui: &mut TerminalUI) -> Result
         ui.display_filename(&path)?;
         ui.display_metadata(&metadata)?;
 
+        player.set_volume(&volume)?;
         player.start_playback()?;
 
         'event_loop: loop {
@@ -154,10 +155,12 @@ fn start(paths: impl IntoIterator<Item = String>, ui: &mut TerminalUI) -> Result
                     paused = !paused;
                 }
                 Event::VolumeDownKeyPressed => {
-                    player.decrement_volume()?;
+                    volume.decrement();
+                    player.set_volume(&volume)?;
                 }
                 Event::VolumeUpKeyPressed => {
-                    player.increment_volume()?;
+                    volume.increment();
+                    player.set_volume(&volume)?;
                 }
                 Event::NextTrackKeyPressed => {
                     player.stop()?;

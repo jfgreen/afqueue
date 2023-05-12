@@ -207,8 +207,6 @@ impl PlaybackContext {
         Ok(AudioFilePlayer {
             output_queue,
             handler: PhantomData,
-            // We assume that the audio queue will start out on max vol
-            volume: MAX_VOLUME,
         })
     }
 
@@ -310,7 +308,6 @@ impl AudioCallbackHandler {
 pub struct AudioFilePlayer<'a> {
     output_queue: AudioQueueRef,
     handler: PhantomData<&'a mut AudioCallbackHandler>,
-    volume: usize,
 }
 
 impl<'a> AudioFilePlayer<'a> {
@@ -336,18 +333,10 @@ impl<'a> AudioFilePlayer<'a> {
         Ok(())
     }
 
-    pub fn increment_volume(&mut self) -> PlaybackResult<()> {
-        self.volume = cmp::min(self.volume + VOLUME_STEP, MAX_VOLUME);
-        let gain = self.volume as f32 / MAX_VOLUME as f32;
-        assert!(gain <= 1.0f32);
-        audio_queue_set_volume(self.output_queue, gain)?;
-        Ok(())
-    }
-
-    pub fn decrement_volume(&mut self) -> PlaybackResult<()> {
-        self.volume = cmp::max(self.volume.saturating_sub(VOLUME_STEP), 0);
-        let gain = self.volume as f32 / MAX_VOLUME as f32;
+    pub fn set_volume(&mut self, volume: &PlaybackVolume) -> PlaybackResult<()> {
+        let gain = volume.gain();
         assert!(gain >= 0.0f32);
+        assert!(gain <= 1.0f32);
         audio_queue_set_volume(self.output_queue, gain)?;
         Ok(())
     }
@@ -361,6 +350,28 @@ impl<'a> Drop for AudioFilePlayer<'a> {
     fn drop(&mut self) {
         // Dispose of the queue synchronously
         audio_queue_dispose(self.output_queue, true).expect("Failed to dispose of audio queue");
+    }
+}
+
+pub struct PlaybackVolume {
+    volume: usize,
+}
+
+impl PlaybackVolume {
+    pub fn new() -> Self {
+        PlaybackVolume { volume: MAX_VOLUME }
+    }
+
+    pub fn increment(&mut self) {
+        self.volume = cmp::min(self.volume + VOLUME_STEP, MAX_VOLUME);
+    }
+
+    pub fn decrement(&mut self) {
+        self.volume = cmp::max(self.volume.saturating_sub(VOLUME_STEP), 0);
+    }
+
+    fn gain(&self) -> f32 {
+        self.volume as f32 / MAX_VOLUME as f32
     }
 }
 
