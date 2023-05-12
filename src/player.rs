@@ -107,6 +107,9 @@ const BUFFER_COUNT: usize = 3;
 
 const AUDIO_QUEUE_RUN_STATE_STOPPED: u32 = 0;
 
+const MAX_VOLUME: usize = 16;
+const VOLUME_STEP: usize = 1;
+
 pub struct PlaybackContext {
     playback_file: AudioFileID,
     format: AudioStreamBasicDescription,
@@ -204,7 +207,8 @@ impl PlaybackContext {
         Ok(AudioFilePlayer {
             output_queue,
             handler: PhantomData,
-            volume : PlaybackVolume::new(),
+            // We assume that the audio queue will start out on max vol
+            volume: MAX_VOLUME,
         })
     }
 
@@ -306,7 +310,7 @@ impl AudioCallbackHandler {
 pub struct AudioFilePlayer<'a> {
     output_queue: AudioQueueRef,
     handler: PhantomData<&'a mut AudioCallbackHandler>,
-    volume: PlaybackVolume,
+    volume: usize,
 }
 
 impl<'a> AudioFilePlayer<'a> {
@@ -333,16 +337,16 @@ impl<'a> AudioFilePlayer<'a> {
     }
 
     pub fn increment_volume(&mut self) -> PlaybackResult<()> {
-        self.volume.increment();
-        let PlaybackVolume(gain) = self.volume;
+        self.volume = cmp::min(self.volume + VOLUME_STEP, MAX_VOLUME);
+        let gain = self.volume as f32 / MAX_VOLUME as f32;
         assert!(gain <= 1.0f32);
         audio_queue_set_volume(self.output_queue, gain)?;
         Ok(())
     }
 
     pub fn decrement_volume(&mut self) -> PlaybackResult<()> {
-        self.volume.decrement();
-        let PlaybackVolume(gain) = self.volume;
+        self.volume = cmp::max(self.volume.saturating_sub(VOLUME_STEP), 0);
+        let gain = self.volume as f32 / MAX_VOLUME as f32;
         assert!(gain >= 0.0f32);
         audio_queue_set_volume(self.output_queue, gain)?;
         Ok(())
@@ -357,32 +361,6 @@ impl<'a> Drop for AudioFilePlayer<'a> {
     fn drop(&mut self) {
         // Dispose of the queue synchronously
         audio_queue_dispose(self.output_queue, true).expect("Failed to dispose of audio queue");
-    }
-}
-
-const GAIN_INCREMENT: f32 = 0.1f32;
-
-struct PlaybackVolume(f32);
-
-impl PlaybackVolume {
-    fn new() -> Self {
-        PlaybackVolume(1.0)
-    }
-
-    fn increment(&mut self) {
-        let mut next = self.0 + GAIN_INCREMENT;
-        if next > 1.0 {
-            next = 1.0;
-        }
-        self.0 = next;
-    }
-
-    fn decrement(&mut self) {
-        let mut next = self.0 - GAIN_INCREMENT;
-        if next < 0.0 {
-            next = 0.0;
-        }
-        self.0 = next;
     }
 }
 
