@@ -90,7 +90,7 @@ impl<'a> TerminalUI<'a> {
 
     pub fn display_filename(&mut self, filename: &str) -> UIResult {
         write!(self.handle, "Playing: {}", filename)?;
-        write!(self.handle, "{NEW_LINE}")?;
+        write!(self.handle, "{NEW_LINE}{NEW_LINE}")?;
         Ok(())
     }
 
