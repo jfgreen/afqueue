@@ -2,22 +2,6 @@
 //!
 //! Built on top of the macOS AudioToolbox framework.
 
-// TODO: Come up with new name for this project
-
-// TODO: Diagram of how the different moving parts interact...
-
-// TODO: How do we make sure this code isnt leaky over time?
-// TODO: Use kAudioFilePropertyFormatList to deal with multi format files?
-// TODO: Query the files channel layout to handle multi channel files?
-// TODO: Check we dont orphan threads from one file to the next.
-//
-// TODO: Figure out where returning a result is over complicated vs a panic
-
-// TODO: Test with channel count > 2 (figure out how we want to support this)
-// It looks like we might be able to read kAudioFilePropertyChannelLayout and
-// set kAudioQueueProperty_ChannelLayout. Might be interesting to see
-// what happens if we set the queue to mono but give it a stereo file
-
 #![feature(extern_types)]
 
 mod ffi {
