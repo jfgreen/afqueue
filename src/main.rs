@@ -27,41 +27,6 @@ const UI_TICK_DURATION_MICROSECONDS: i64 = 33333; // 30FPS
 
 use std::{env, process};
 
-/// Playback a list of files passed in via command line arguments
-fn main() {
-    let args = env::args();
-    let audio_file_paths = parse_args(args);
-
-    let mut ui = TerminalUI::activate().unwrap_or_else(|err| {
-        println!("Failed to activate UI, {err}");
-        process::exit(1)
-    });
-
-    let playback_result = start(audio_file_paths, &mut ui);
-
-    // We are much more likely to get a playback error than a UI error, so we try
-    // and deactive the UI first so playback errors can be printed normally
-    ui.deactivate()
-        .expect("Deactivating UI should succeed, given it activated OK");
-
-    if let Err(err) = playback_result {
-        println!("Failed to playback files, {err}");
-        process::exit(1)
-    }
-}
-
-/// Parse arguments or print help message if supplied invalid input.
-fn parse_args(args: impl IntoIterator<Item = String>) -> impl Iterator<Item = String> {
-    let mut args = args.into_iter().peekable();
-    let exec = args.next();
-    if args.peek().is_none() {
-        let exec = exec.as_deref().unwrap_or("afqueue");
-        println!("Usage: {exec} [audio-file ...]");
-        process::exit(1);
-    }
-    args
-}
-
 #[derive(Debug)]
 pub enum AfqueueError {
     Playback(PlaybackError),
@@ -101,6 +66,41 @@ impl fmt::Display for AfqueueError {
             }
         }
     }
+}
+
+/// Playback a list of files passed in via command line arguments
+fn main() {
+    let args = env::args();
+    let audio_file_paths = parse_args(args);
+
+    let mut ui = TerminalUI::activate().unwrap_or_else(|err| {
+        println!("Failed to activate UI, {err}");
+        process::exit(1)
+    });
+
+    let playback_result = start(audio_file_paths, &mut ui);
+
+    // We are much more likely to get a playback error than a UI error, so we try
+    // and deactive the UI first so playback errors can be printed normally
+    ui.deactivate()
+        .expect("Deactivating UI should succeed, given it activated OK");
+
+    if let Err(err) = playback_result {
+        println!("Failed to playback files, {err}");
+        process::exit(1)
+    }
+}
+
+/// Parse arguments or print help message if supplied invalid input.
+fn parse_args(args: impl IntoIterator<Item = String>) -> impl Iterator<Item = String> {
+    let mut args = args.into_iter().peekable();
+    let exec = args.next();
+    if args.peek().is_none() {
+        let exec = exec.as_deref().unwrap_or("afqueue");
+        println!("Usage: {exec} [audio-file ...]");
+        process::exit(1);
+    }
+    args
 }
 
 //TODO: Make this a bit less nested
