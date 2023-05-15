@@ -17,6 +17,7 @@ mod player;
 mod ui;
 
 use std::fmt;
+use std::ops::ControlFlow;
 
 use events::{Event, EventError};
 use player::{PlaybackContext, PlaybackError, PlaybackVolume};
@@ -68,26 +69,51 @@ impl fmt::Display for AfqueueError {
     }
 }
 
-/// Playback a list of files passed in via command line arguments
+//TODO: Add more context to errors using err_with pattern.
+//TODO: Make error string concatination look better
 fn main() {
     let args = env::args();
     let audio_file_paths = parse_args(args);
 
-    let mut ui = TerminalUI::activate().unwrap_or_else(|err| {
-        println!("Failed to activate UI, {err}");
+    play_audio_files(audio_file_paths).unwrap_or_else(|err| {
+        println!("{err}");
         process::exit(1)
     });
+}
 
-    let playback_result = start(audio_file_paths, &mut ui);
+/// Playback a list of files passed in via command line arguments
+fn play_audio_files(paths: impl IntoIterator<Item = String>) -> Result<(), AfqueueError> {
+    let mut ui = TerminalUI::activate()?;
 
-    // We are much more likely to get a playback error than a UI error, so we try
-    // and deactive the UI first so playback errors can be printed normally
-    ui.deactivate()
-        .expect("Deactivating UI should succeed, given it activated OK");
+    //TODO: Pass in file descriptor to build_event_queue
+    //TODO: sender and reader are not that accurate names
+    let (event_sender, mut event_reader) = events::build_event_queue()?;
+    let mut volume = PlaybackVolume::new();
 
-    if let Err(err) = playback_result {
-        println!("Failed to playback files, {err}");
-        process::exit(1)
+    let playback_result = paths.into_iter().try_for_each(|path| {
+        match play_audio_file(
+            &path,
+            &mut ui,
+            &event_sender,
+            &mut event_reader,
+            &mut volume,
+        ) {
+            Ok(EndOfPlaybackReason::ExitRequested) => ControlFlow::Break(Ok(())),
+            Ok(EndOfPlaybackReason::EndOfFile) => ControlFlow::Continue(()),
+            Err(err) => ControlFlow::Break(Err(err)),
+        }
+    });
+
+    event_reader.close()?;
+
+    // We are much more likely to encouter a playback error than a UI error, so we
+    // try and deactive the UI first so playback errors can be printed normally
+    ui.deactivate()?;
+
+    match playback_result {
+        ControlFlow::Continue(()) => Ok(()),
+        ControlFlow::Break(Ok(())) => Ok(()),
+        ControlFlow::Break(Err(err)) => Err(err),
     }
 }
 
@@ -103,103 +129,106 @@ fn parse_args(args: impl IntoIterator<Item = String>) -> impl Iterator<Item = St
     args
 }
 
-//TODO: Make this a bit less nested
-fn start(paths: impl IntoIterator<Item = String>, ui: &mut TerminalUI) -> Result<(), AfqueueError> {
-    //TODO: Pass in file descriptor to build_event_queue
-    //TODO: sender and reader are not that accurate names
-    let (event_sender, mut event_reader) = events::build_event_queue()?;
+//TODO: Could we negate the need for this enum if we did event handling higher
+// up?
+enum EndOfPlaybackReason {
+    ExitRequested,
+    EndOfFile,
+}
 
+//TODO: Think about the number of things being passed in here, seems odd
+fn play_audio_file(
+    path: &str,
+    ui: &mut TerminalUI,
+    event_sender: &events::Sender,
+    event_reader: &mut events::Receiver,
+    volume: &mut PlaybackVolume,
+) -> Result<EndOfPlaybackReason, AfqueueError> {
+    let context = PlaybackContext::new(&path)?;
+    let metadata = context.file_metadata()?;
+    let mut meter_state = context.new_meter_state();
+    let mut handler = context.new_audio_callback_handler(event_sender.clone());
+    let mut player = context.new_audio_player(&mut handler)?;
+
+    //TODO: Is there a way of making enabling and disabling the timer using
+    // idempotent operations so we dont have to track if we have set it or not?
+    event_reader.enable_ui_timer_event(UI_TICK_DURATION_MICROSECONDS)?;
+    let mut timer_set = true;
     let mut exit_requested = false;
+    let mut paused = false;
 
-    let mut volume = PlaybackVolume::new();
+    ui.reset_screen()?;
+    ui.display_filename(&path)?;
+    ui.display_metadata(&metadata)?;
 
-    for path in paths {
-        if exit_requested {
-            break;
-        }
+    player.set_volume(&volume)?;
+    player.start_playback()?;
 
-        let context = PlaybackContext::new(&path)?;
-        let metadata = context.file_metadata()?;
-        let mut meter_state = context.new_meter_state();
-        let mut handler = context.new_audio_callback_handler(event_sender.clone());
-        let mut player = context.new_audio_player(&mut handler)?;
-        let mut paused = false;
+    'event_loop: loop {
+        let event = event_reader.next();
 
-        //TODO: Is there a way of making enabling and disabling the timer using
-        // idempotent operations so we dont have to track if we have set it or not?
-        event_reader.enable_ui_timer_event(UI_TICK_DURATION_MICROSECONDS)?;
-        let mut timer_set = true;
-
-        ui.reset_screen()?;
-        ui.display_filename(&path)?;
-        ui.display_metadata(&metadata)?;
-
-        player.set_volume(&volume)?;
-        player.start_playback()?;
-
-        'event_loop: loop {
-            let event = event_reader.next();
-
-            match event {
-                Event::PauseKeyPressed => {
-                    if paused {
-                        player.resume()?;
-                        //TODO: Minus time since last tick?
-                        event_reader.enable_ui_timer_event(UI_TICK_DURATION_MICROSECONDS)?;
-                        timer_set = true;
-                    } else {
-                        player.pause()?;
-                        event_reader.disable_ui_timer_event()?;
-                        timer_set = false;
-                    }
-                    paused = !paused;
-                }
-                Event::VolumeDownKeyPressed => {
-                    volume.decrement();
-                    player.set_volume(&volume)?;
-                }
-                Event::VolumeUpKeyPressed => {
-                    volume.increment();
-                    player.set_volume(&volume)?;
-                }
-                Event::NextTrackKeyPressed => {
-                    player.stop()?;
-                }
-                Event::ExitKeyPressed => {
-                    player.stop()?;
-                    exit_requested = true;
-                }
-                Event::AudioQueueStopped => {
-                    //TODO: Is event_reader that accurate a name?
-                    if timer_set {
-                        event_reader.disable_ui_timer_event()?;
-                    }
-                    break 'event_loop;
-                }
-                Event::UITick => {
-                    // NOTE: This UI tick event might happen in between a user requested
-                    // player.stop() being invoked and the queue actually stopping
-                    // (i.e an AudioQueueStopped event)
-                    // We are going to assume that this wont cause a problem.
-
-                    player.get_meter_level(&mut meter_state)?;
-                    ui.display_meter(meter_state.levels())?;
-                    ui.flush()?;
-                    //TODO: Figure out propper timestep that takes into account time spent updating
-                    // UI, and general timer inaccuracy
+        match event {
+            Event::PauseKeyPressed => {
+                if paused {
+                    player.resume()?;
+                    //TODO: Minus time since last tick?
                     event_reader.enable_ui_timer_event(UI_TICK_DURATION_MICROSECONDS)?;
                     timer_set = true;
+                } else {
+                    player.pause()?;
+                    event_reader.disable_ui_timer_event()?;
+                    timer_set = false;
                 }
-                Event::TerminalResized => {
-                    //TODO: Make UI hold on to current metadata/state, resize current bar
-                    ui.update_size()?;
-                    ui.reset_screen()?;
-                    ui.display_filename(&path)?;
-                    ui.display_metadata(&metadata)?;
+                paused = !paused;
+            }
+            Event::VolumeDownKeyPressed => {
+                volume.decrement();
+                player.set_volume(&volume)?;
+            }
+            Event::VolumeUpKeyPressed => {
+                volume.increment();
+                player.set_volume(&volume)?;
+            }
+            Event::NextTrackKeyPressed => {
+                player.stop()?;
+            }
+            Event::ExitKeyPressed => {
+                player.stop()?;
+                exit_requested = true;
+            }
+            Event::PlaybackFinished => {
+                //TODO: Is event_reader that accurate a name?
+                if timer_set {
+                    event_reader.disable_ui_timer_event()?;
                 }
+                break 'event_loop;
+            }
+            Event::UITick => {
+                // NOTE: This UI tick event might happen in between a user requested
+                // player.stop() being invoked and the queue actually stopping
+                // (i.e an AudioQueueStopped event)
+                // We are going to assume that this wont cause a problem.
+
+                player.get_meter_level(&mut meter_state)?;
+                ui.display_meter(meter_state.levels())?;
+                ui.flush()?;
+                //TODO: Figure out propper timestep that takes into account time spent updating
+                // UI, and general timer inaccuracy
+                event_reader.enable_ui_timer_event(UI_TICK_DURATION_MICROSECONDS)?;
+                timer_set = true;
+            }
+            Event::TerminalResized => {
+                //TODO: Make UI hold on to current metadata/state, resize current bar
+                ui.update_size()?;
+                ui.reset_screen()?;
+                ui.display_filename(&path)?;
+                ui.display_metadata(&metadata)?;
             }
         }
     }
-    event_reader.close()?;
-    Ok(())
+    if exit_requested {
+        Ok(EndOfPlaybackReason::ExitRequested)
+    } else {
+        Ok(EndOfPlaybackReason::EndOfFile)
+    }
 }

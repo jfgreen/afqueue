@@ -48,7 +48,7 @@ pub enum Event {
     ExitKeyPressed,
     VolumeUpKeyPressed,
     VolumeDownKeyPressed,
-    AudioQueueStopped,
+    PlaybackFinished,
     UITick,
     TerminalResized,
 }
@@ -120,16 +120,13 @@ impl Receiver {
             }
 
             let queue_event = self.queue_reader.read();
-            let ident_filter = (queue_event.ident, queue_event.filter);
 
-            match ident_filter {
+            match (queue_event.ident, queue_event.filter) {
                 (kq::STDIN_FILE_NUM, kq::EVFILT_READ) => {
                     self.input_reader.fill_buffer();
                     continue;
                 }
-                (AUDIO_QUEUE_PLAYBACK_FINISHED, kq::EVFILT_USER) => {
-                    return Event::AudioQueueStopped
-                }
+                (AUDIO_QUEUE_PLAYBACK_FINISHED, kq::EVFILT_USER) => return Event::PlaybackFinished,
                 (UI_TIMER_TICK, kq::EVFILT_TIMER) => return Event::UITick,
                 (kq::SIGWINCH, kq::EVFILT_SIGNAL) => return Event::TerminalResized,
                 _ => continue,
