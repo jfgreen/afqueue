@@ -173,6 +173,7 @@ impl PlaybackContext {
         }
     }
 
+    //TODO: Do we need to be explicit about the lifetime?
     pub fn new_audio_player<'a>(
         &self,
         handler: &'a mut AudioCallbackHandler,

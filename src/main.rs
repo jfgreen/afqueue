@@ -17,7 +17,7 @@ mod player;
 mod ui;
 
 use std::fmt;
-use std::ops::ControlFlow;
+use std::ops::ControlFlow::{self, Break, Continue};
 
 use events::{Event, EventError};
 use player::{PlaybackContext, PlaybackError, PlaybackVolume};
@@ -90,19 +90,18 @@ fn play_audio_files(paths: impl IntoIterator<Item = String>) -> Result<(), Afque
     let (event_sender, mut event_reader) = events::build_event_queue()?;
     let mut volume = PlaybackVolume::new();
 
-    let playback_result = paths.into_iter().try_for_each(|path| {
-        match play_audio_file(
+    let mut playback_result = Ok(Continue(()));
+    let mut paths = paths.into_iter();
+
+    while let (Some(path), Ok(Continue(()))) = (paths.next(), &playback_result) {
+        playback_result = play_audio_file(
             &path,
             &mut ui,
             &event_sender,
             &mut event_reader,
             &mut volume,
-        ) {
-            Ok(EndOfPlaybackReason::ExitRequested) => ControlFlow::Break(Ok(())),
-            Ok(EndOfPlaybackReason::EndOfFile) => ControlFlow::Continue(()),
-            Err(err) => ControlFlow::Break(Err(err)),
-        }
-    });
+        );
+    }
 
     event_reader.close()?;
 
@@ -110,11 +109,8 @@ fn play_audio_files(paths: impl IntoIterator<Item = String>) -> Result<(), Afque
     // try and deactive the UI first so playback errors can be printed normally
     ui.deactivate()?;
 
-    match playback_result {
-        ControlFlow::Continue(()) => Ok(()),
-        ControlFlow::Break(Ok(())) => Ok(()),
-        ControlFlow::Break(Err(err)) => Err(err),
-    }
+    // We only want to return the error, not control flow
+    playback_result.map(|_| ())
 }
 
 /// Parse arguments or print help message if supplied invalid input.
@@ -129,13 +125,6 @@ fn parse_args(args: impl IntoIterator<Item = String>) -> impl Iterator<Item = St
     args
 }
 
-//TODO: Could we negate the need for this enum if we did event handling higher
-// up?
-enum EndOfPlaybackReason {
-    ExitRequested,
-    EndOfFile,
-}
-
 //TODO: Think about the number of things being passed in here, seems odd
 fn play_audio_file(
     path: &str,
@@ -143,7 +132,7 @@ fn play_audio_file(
     event_sender: &events::Sender,
     event_reader: &mut events::Receiver,
     volume: &mut PlaybackVolume,
-) -> Result<EndOfPlaybackReason, AfqueueError> {
+) -> Result<ControlFlow<()>, AfqueueError> {
     let context = PlaybackContext::new(&path)?;
     let metadata = context.file_metadata()?;
     let mut meter_state = context.new_meter_state();
@@ -227,8 +216,8 @@ fn play_audio_file(
         }
     }
     if exit_requested {
-        Ok(EndOfPlaybackReason::ExitRequested)
+        Ok(Break(()))
     } else {
-        Ok(EndOfPlaybackReason::EndOfFile)
+        Ok(Continue(()))
     }
 }
