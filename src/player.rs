@@ -48,10 +48,10 @@ impl fmt::Display for PlaybackError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
             PlaybackError::Path(err) => {
-                write!(f, "Supplied string is not a valid path: {err}")
+                write!(f, "supplied string is not a valid path: {err}")
             }
             PlaybackError::System(SystemErrorCode(code)) => {
-                write!(f, "System error, code: '{code}'")
+                write!(f, "system error, code: '{code}'")
             }
             PlaybackError::IO(err) => {
                 write!(f, "IO error: '{err}'")

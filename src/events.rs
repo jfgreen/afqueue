@@ -13,6 +13,7 @@ const INPUT_BUFFER_SIZE: usize = 10;
 
 #[derive(Debug)]
 pub enum EventError {
+    //TODO: Have a reason field instead?
     Create(io::Error),
     Add(io::Error),
     Trigger(io::Error),
@@ -24,7 +25,7 @@ impl fmt::Display for EventError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
             EventError::Create(err) => {
-                write!(f, "IO error creating kqueue'{err}'")
+                write!(f, "IO error creating kqueue '{err}'")
             }
             EventError::Add(err) => {
                 write!(f, "IO error adding event filter '{err}'")
