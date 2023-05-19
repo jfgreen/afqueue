@@ -6,11 +6,9 @@ use std::ops::ControlFlow::{self, Break, Continue};
 
 use crate::events::{self, Event, EventError};
 use crate::player::{PlaybackContext, PlaybackError, PlaybackVolume};
-use crate::ui::{self, TerminalUI, UIError};
+use crate::ui::{TerminalUI, UIError};
 
 const UI_TICK_DURATION_MICROSECONDS: i64 = 33333; // 30FPS
-
-use std::{env, process};
 
 #[derive(Debug)]
 pub struct BoomboxError {
@@ -79,7 +77,7 @@ impl<'a> Boombox<'a> {
     fn init() -> Result<Self, BoomboxErrorReason> {
         //TODO: Pass in file descriptor to build_event_queue
         //TODO: sender and reader are not that accurate names
-        let (event_sender, mut event_reader) = events::build_event_queue()?;
+        let (event_sender, event_reader) = events::build_event_queue()?;
         Ok(Boombox {
             event_sender,
             event_reader,
@@ -97,7 +95,7 @@ impl<'a> Boombox<'a> {
     }
 
     fn play(&mut self, path: &str) -> Result<ControlFlow<()>, BoomboxErrorReason> {
-        let context = PlaybackContext::new(&path)?;
+        let context = PlaybackContext::new(path)?;
         let metadata = context.file_metadata()?;
         let mut meter_state = context.new_meter_state();
         let mut handler = context.new_audio_callback_handler(self.event_sender.clone());
@@ -112,7 +110,7 @@ impl<'a> Boombox<'a> {
         let mut paused = false;
 
         self.ui.reset_screen()?;
-        self.ui.display_filename(&path)?;
+        self.ui.display_filename(path)?;
         self.ui.display_metadata(&metadata)?;
 
         player.set_volume(&self.volume)?;
@@ -177,7 +175,7 @@ impl<'a> Boombox<'a> {
                     //TODO: Make UI hold on to current metadata/state, resize current bar
                     self.ui.update_size()?;
                     self.ui.reset_screen()?;
-                    self.ui.display_filename(&path)?;
+                    self.ui.display_filename(path)?;
                     self.ui.display_metadata(&metadata)?;
                 }
             }

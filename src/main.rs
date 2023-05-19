@@ -19,7 +19,7 @@ mod ui;
 
 use boombox::{Boombox, BoomboxError};
 
-use std::ops::ControlFlow::{self, Break, Continue};
+use std::ops::ControlFlow::Continue;
 use std::{env, process};
 
 fn main() {
@@ -51,8 +51,6 @@ fn play_audio_files(paths: impl IntoIterator<Item = String>) -> Result<(), Boomb
     let mut paths = paths.into_iter();
 
     while let (Some(path), Ok(Continue(()))) = (paths.next(), &result) {
-        //TODO: Figure out how to capture context in error, or pull this up to top
-        // level?
         result = boombox.play_file(&path);
     }
 
