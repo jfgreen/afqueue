@@ -17,3 +17,4 @@ Check for memory leaks over time
 Check for orphaned threads over time
 Investigate using kAudioFilePropertyFormatList to deal with multi format files
 Consider handling multi channel files with kAudioFilePropertyChannelLayout, kAudioQueueProperty_ChannelLayout.
+Figure out why some AIFF files wont play.
