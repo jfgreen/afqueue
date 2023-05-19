@@ -34,9 +34,7 @@ pub type AudioQueueParameterValue = f32;
 pub type AudioFilePermissions = i8;
 
 /// Used to indicate that an audio file should be read only.
-pub const AUDIO_FILE_READ_PERMISSION: i8 = 1;
-
-//TODO: Should the below constants use the above types?
+pub const AUDIO_FILE_READ_PERMISSION: AudioFilePermissions = 1;
 
 /// Constant used to interact with an audio files metadata.
 ///
@@ -46,7 +44,7 @@ pub const AUDIO_FILE_READ_PERMISSION: i8 = 1;
 /// The value of this property is represented by an CFDictionaryRef.
 ///
 /// The caller is responsable for releasing the dictionary via `cf_release`.
-pub const AUDIO_FILE_PROPERTY_INFO_DICTIONARY: u32 = u32::from_be_bytes(*b"info");
+pub const AUDIO_FILE_PROPERTY_INFO_DICTIONARY: AudioFilePropertyID = u32::from_be_bytes(*b"info");
 
 /// Constant used to interact with an audio files format description.
 ///
@@ -54,14 +52,14 @@ pub const AUDIO_FILE_PROPERTY_INFO_DICTIONARY: u32 = u32::from_be_bytes(*b"info"
 /// of the files audio format.
 ///
 /// The value of this property is represented by an AudioStreamBasicDescription.
-pub const AUDIO_FILE_PROPERTY_DATA_FORMAT: u32 = u32::from_be_bytes(*b"dfmt");
+pub const AUDIO_FILE_PROPERTY_DATA_FORMAT: AudioFilePropertyID = u32::from_be_bytes(*b"dfmt");
 
 /// Constant used to interact with an audio files cookie data.
 ///
 /// Magic cookie data encodes format specific data.
 ///
 /// The value of this property is represented by a pointer.
-pub const AUDIO_FILE_PROPERTY_MAGIC_COOKIE_DATA: u32 = u32::from_be_bytes(*b"mgic");
+pub const AUDIO_FILE_PROPERTY_MAGIC_COOKIE_DATA: AudioFilePropertyID = u32::from_be_bytes(*b"mgic");
 
 /// Constant used to read a files theoretical maximum packet size.
 ///
@@ -70,10 +68,11 @@ pub const AUDIO_FILE_PROPERTY_MAGIC_COOKIE_DATA: u32 = u32::from_be_bytes(*b"mgi
 /// having to scan the entire audio file to find the actual largest packet.
 ///
 /// The value of this property is represented as a u32.
-pub const AUDIO_FILE_PROPERTY_PACKET_SIZE_UPPER_BOUND: u32 = u32::from_be_bytes(*b"pkub");
+pub const AUDIO_FILE_PROPERTY_PACKET_SIZE_UPPER_BOUND: AudioFilePropertyID =
+    u32::from_be_bytes(*b"pkub");
 
 /// Error returned when trying to access an unsupported audio file property
-pub const AUDIO_FILE_ERROR_UNSUPPORTED_PROPERTY: i32 = i32::from_be_bytes(*b"pty?");
+pub const AUDIO_FILE_ERROR_UNSUPPORTED_PROPERTY: OSStatus = i32::from_be_bytes(*b"pty?");
 
 /// Constant used to interact with an audio queues cookie data.
 ///
@@ -81,7 +80,8 @@ pub const AUDIO_FILE_ERROR_UNSUPPORTED_PROPERTY: i32 = i32::from_be_bytes(*b"pty
 /// before any buffers are enqueued.
 ///
 /// The value of this property is represented by a pointer.
-pub const AUDIO_QUEUE_PROPERTY_MAGIC_COOKIE_DATA: u32 = u32::from_be_bytes(*b"aqmc");
+pub const AUDIO_QUEUE_PROPERTY_MAGIC_COOKIE_DATA: AudioQueuePropertyID =
+    u32::from_be_bytes(*b"aqmc");
 
 /// Constant used to query an audio queue to determine if it is running.
 ///
@@ -89,7 +89,7 @@ pub const AUDIO_QUEUE_PROPERTY_MAGIC_COOKIE_DATA: u32 = u32::from_be_bytes(*b"aq
 /// indicating if an audio queue is running.
 ///
 /// The value of this property is represented by `u32`.
-pub const AUDIO_QUEUE_PROPERTY_IS_RUNNING: u32 = u32::from_be_bytes(*b"aqrn");
+pub const AUDIO_QUEUE_PROPERTY_IS_RUNNING: AudioQueuePropertyID = u32::from_be_bytes(*b"aqrn");
 
 /// Constant used to set or query the property that determines whether an audio
 /// queue has level metering enabled.
@@ -97,24 +97,26 @@ pub const AUDIO_QUEUE_PROPERTY_IS_RUNNING: u32 = u32::from_be_bytes(*b"aqrn");
 /// 0 = off, 1 = on
 ///
 /// The value of this property is represented by `u32`.
-pub const AUDIO_QUEUE_PROPERTY_ENABLE_LEVEL_METERING: u32 = u32::from_be_bytes(*b"aqme");
+pub const AUDIO_QUEUE_PROPERTY_ENABLE_LEVEL_METERING: AudioQueuePropertyID =
+    u32::from_be_bytes(*b"aqme");
 
 /// Constant used to query the state of an audio queues level meter.
 ///
-/// Using this constant with `audio_file_get_property` will return an array of
+/// Using this constant with `audio_queue_get_property` will return an array of
 /// `AudioQueueLevelMeterState` structs, with one struct per channel. Metering
 /// values in each struct will be normalised between 0 and 1.
-pub const AUDIO_QUEUE_PROPERTY_LEVEL_METER_STATE: u32 = u32::from_be_bytes(*b"aqmv");
+pub const AUDIO_QUEUE_PROPERTY_LEVEL_METER_STATE: AudioQueuePropertyID =
+    u32::from_be_bytes(*b"aqmv");
 
 /// Constant used to control an audio queues relative volume.
 ///
 /// The value of this property is on a linear scale from 0.0 (zero gain) to 1.0
 /// (unity gain).
-pub const AUDIO_QUEUE_PARAMETER_VOLUME: u32 = 1;
+pub const AUDIO_QUEUE_PARAMETER_VOLUME: AudioQueueParameterID = 1;
 
 /// Error returned when trying to enqueue on an audio queue that is resetting,
 /// stopping, or being disposed.
-pub const AUDIO_QUEUE_ERROR_ENQUEUE_DURING_RESET: i32 = -66632;
+pub const AUDIO_QUEUE_ERROR_ENQUEUE_DURING_RESET: OSStatus = -66632;
 
 /// A reference to an opaque type representing an audio queue object.
 ///
