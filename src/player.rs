@@ -173,11 +173,10 @@ impl PlaybackContext {
         }
     }
 
-    //TODO: Do we need to be explicit about the lifetime?
-    pub fn new_audio_player<'a>(
+    pub fn new_audio_player(
         &self,
-        handler: &'a mut AudioCallbackHandler,
-    ) -> PlaybackResult<AudioFilePlayer<'a>> {
+        handler: &mut AudioCallbackHandler,
+    ) -> PlaybackResult<AudioFilePlayer> {
         let handler_ptr = handler as *mut _ as *mut c_void;
         let output_queue = output_queue_create(&self.format, handler_ptr)?;
 
