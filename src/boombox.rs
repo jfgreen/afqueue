@@ -13,43 +13,49 @@ const UI_TICK_DURATION_MICROSECONDS: i64 = 33333; // 30FPS
 use std::{env, process};
 
 #[derive(Debug)]
-pub enum BoomboxError {
+pub struct BoomboxError {
+    context: String,
+    reason: BoomboxErrorReason,
+}
+
+impl fmt::Display for BoomboxError {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match &self.reason {
+            BoomboxErrorReason::Playback(err) => {
+                write!(f, "Playback failure while {}, {}", self.context, err)
+            }
+            BoomboxErrorReason::UI(err) => {
+                write!(f, "UI failure while {}, {}", self.context, err)
+            }
+            BoomboxErrorReason::Event(err) => {
+                write!(f, "Event loop failure while {}, {}", self.context, err)
+            }
+        }
+    }
+}
+
+#[derive(Debug)]
+pub enum BoomboxErrorReason {
     Playback(PlaybackError),
     UI(UIError),
     Event(EventError),
 }
 
-impl From<PlaybackError> for BoomboxError {
-    fn from(err: PlaybackError) -> BoomboxError {
-        BoomboxError::Playback(err)
+impl From<PlaybackError> for BoomboxErrorReason {
+    fn from(err: PlaybackError) -> BoomboxErrorReason {
+        BoomboxErrorReason::Playback(err)
     }
 }
 
-impl From<UIError> for BoomboxError {
-    fn from(err: UIError) -> BoomboxError {
-        BoomboxError::UI(err)
+impl From<UIError> for BoomboxErrorReason {
+    fn from(err: UIError) -> BoomboxErrorReason {
+        BoomboxErrorReason::UI(err)
     }
 }
 
-impl From<EventError> for BoomboxError {
-    fn from(err: EventError) -> BoomboxError {
-        BoomboxError::Event(err)
-    }
-}
-
-impl fmt::Display for BoomboxError {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        match self {
-            BoomboxError::Playback(err) => {
-                write!(f, "Problem playing back audio, {err}")
-            }
-            BoomboxError::UI(err) => {
-                write!(f, "Problem in UI, {err}")
-            }
-            BoomboxError::Event(err) => {
-                write!(f, "Problem in event loop, {err}")
-            }
-        }
+impl From<EventError> for BoomboxErrorReason {
+    fn from(err: EventError) -> BoomboxErrorReason {
+        BoomboxErrorReason::Event(err)
     }
 }
 
@@ -63,6 +69,14 @@ pub struct Boombox<'a> {
 
 impl<'a> Boombox<'a> {
     pub fn initialise() -> Result<Self, BoomboxError> {
+        Boombox::init().map_err(|err| BoomboxError {
+            //TODO: This feels a bit forced?
+            context: String::from("getting ready for playback"),
+            reason: err,
+        })
+    }
+
+    fn init() -> Result<Self, BoomboxErrorReason> {
         //TODO: Pass in file descriptor to build_event_queue
         //TODO: sender and reader are not that accurate names
         let (event_sender, mut event_reader) = events::build_event_queue()?;
@@ -74,9 +88,15 @@ impl<'a> Boombox<'a> {
         })
     }
 
-    //TODO: Still feels like there should be a way to embed context of file that
-    // failed in boombox error... so that we can let boombox pull from a playlist
+    //TODO: Might it be nicer for boombox to pull from a playlist?
     pub fn play_file(&mut self, path: &str) -> Result<ControlFlow<()>, BoomboxError> {
+        self.play(path).map_err(|err| BoomboxError {
+            context: format!("playing back file '{path}'"),
+            reason: err,
+        })
+    }
+
+    fn play(&mut self, path: &str) -> Result<ControlFlow<()>, BoomboxErrorReason> {
         let context = PlaybackContext::new(&path)?;
         let metadata = context.file_metadata()?;
         let mut meter_state = context.new_meter_state();
@@ -170,6 +190,13 @@ impl<'a> Boombox<'a> {
     }
 
     pub fn shutdown(self) -> Result<(), BoomboxError> {
+        self.stop().map_err(|err| BoomboxError {
+            context: String::from("shutting down"),
+            reason: err,
+        })
+    }
+
+    fn stop(self) -> Result<(), BoomboxErrorReason> {
         self.event_reader.close()?;
         self.ui.deactivate()?;
         Ok(())

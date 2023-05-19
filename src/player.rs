@@ -51,10 +51,10 @@ impl fmt::Display for PlaybackError {
                 write!(f, "supplied string is not a valid path: {err}")
             }
             PlaybackError::System(SystemErrorCode(code)) => {
-                write!(f, "system error, code: '{code}'")
+                write!(f, "encountered system error with code '{code}'")
             }
             PlaybackError::IO(err) => {
-                write!(f, "IO error: '{err}'")
+                write!(f, "encountered IO error '{err}'")
             }
         }
     }
