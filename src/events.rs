@@ -11,36 +11,52 @@ const UI_TIMER_TICK: u64 = 41;
 const KEVENT_BUFFER_SIZE: usize = 10;
 const INPUT_BUFFER_SIZE: usize = 10;
 
+macro_rules! event_err {
+    ($e:expr) => {{
+        let io_err = io::Error::last_os_error();
+        Err(EventError {
+            source: io_err,
+            context: $e,
+        })
+    }};
+}
+
 #[derive(Debug)]
-pub enum EventError {
-    //TODO: Have a reason field instead?
-    Create(io::Error),
-    Add(io::Error),
-    Trigger(io::Error),
-    Enable(io::Error),
-    Close(io::Error),
+pub struct EventError {
+    source: io::Error,
+    context: EventErrorContext,
 }
 
 impl fmt::Display for EventError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        match self {
-            EventError::Create(err) => {
+        let err = &self.source;
+        match &self.context {
+            EventErrorContext::Creating => {
                 write!(f, "IO error creating kqueue '{err}'")
             }
-            EventError::Add(err) => {
-                write!(f, "IO error adding event filter '{err}'")
+            EventErrorContext::Adding => {
+                write!(f, "IO error adding kqueue event filter '{err}'")
             }
-            EventError::Trigger(err) => {
-                write!(f, "IO error triggering event '{err}'")
+            EventErrorContext::Triggering => {
+                write!(f, "IO error triggering kqueue event '{err}'")
             }
-            EventError::Enable(err) => {
-                write!(f, "IO error enabling event '{err}'")
+            EventErrorContext::Enabling => {
+                write!(f, "IO error enabling kqueue event '{err}'")
             }
-            EventError::Close(err) => {
+            EventErrorContext::Closing => {
                 write!(f, "IO error closing kqueue '{err}'")
             }
         }
     }
+}
+
+#[derive(Debug)]
+pub enum EventErrorContext {
+    Creating,
+    Adding,
+    Triggering,
+    Enabling,
+    Closing,
 }
 
 pub enum Event {
@@ -84,8 +100,7 @@ impl Sender {
             );
 
             if result < 0 {
-                let io_err = io::Error::last_os_error();
-                return Err(EventError::Trigger(io_err));
+                return event_err!(EventErrorContext::Triggering);
             }
             Ok(())
         }
@@ -158,8 +173,7 @@ impl Receiver {
             );
 
             if result < 0 {
-                let io_err = io::Error::last_os_error();
-                return Err(EventError::Enable(io_err));
+                return event_err!(EventErrorContext::Enabling);
             }
             Ok(())
         }
@@ -188,8 +202,7 @@ impl Receiver {
             );
 
             if result < 0 {
-                let io_err = io::Error::last_os_error();
-                return Err(EventError::Enable(io_err));
+                return event_err!(EventErrorContext::Enabling);
             }
             Ok(())
         }
@@ -200,8 +213,7 @@ impl Receiver {
         unsafe {
             let result = kq::close(self.queue);
             if result < 0 {
-                let io_err = io::Error::last_os_error();
-                Err(EventError::Close(io_err))
+                return event_err!(EventErrorContext::Closing);
             } else {
                 Ok(())
             }
@@ -216,8 +228,7 @@ pub fn build_event_queue() -> Result<(Sender, Receiver), EventError> {
         // Create a new Kqueue
         let kqueue = kqueue();
         if kqueue < 0 {
-            let io_err = io::Error::last_os_error();
-            return Err(EventError::Create(io_err));
+            return event_err!(EventErrorContext::Creating);
         }
 
         // Describe the events we are interested in...
@@ -269,8 +280,7 @@ pub fn build_event_queue() -> Result<(Sender, Receiver), EventError> {
         );
 
         if result < 0 {
-            let io_err = io::Error::last_os_error();
-            return Err(EventError::Add(io_err));
+            return event_err!(EventErrorContext::Adding);
         }
 
         let sender = Sender { queue: kqueue };
