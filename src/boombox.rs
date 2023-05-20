@@ -12,6 +12,7 @@ const UI_TICK_DURATION_MICROSECONDS: i64 = 33333; // 30FPS
 
 #[derive(Debug)]
 pub struct BoomboxError {
+    //TODO: Context could be enum
     context: String,
     reason: BoomboxErrorReason,
 }
@@ -74,6 +75,8 @@ impl<'a> Boombox<'a> {
         })
     }
 
+    //TODO: Error structure still feels a bit off...
+    //Is there a way we can just return a BoomboxError from here?
     fn init() -> Result<Self, BoomboxErrorReason> {
         //TODO: Pass in file descriptor to build_event_queue
         //TODO: sender and reader are not that accurate names
