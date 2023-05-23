@@ -19,3 +19,4 @@ Investigate using kAudioFilePropertyFormatList to deal with multi format files
 Consider handling multi channel files with kAudioFilePropertyChannelLayout, kAudioQueueProperty_ChannelLayout.
 Figure out why some AIFF files wont play.
 Add a debug mode / toggle showing things like the audio stream basic description, buffer size, packets per buffer
+Fix freeze when external drive is removed
