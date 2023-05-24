@@ -1,4 +1,5 @@
 use std::cmp;
+use std::error::Error;
 use std::ffi::{c_void, CStr, CString, NulError};
 use std::fmt;
 use std::io;
@@ -60,6 +61,16 @@ impl fmt::Display for PlaybackError {
     }
 }
 
+impl Error for PlaybackError {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        match self {
+            PlaybackError::Path(err) => Some(err),
+            PlaybackError::System(err) => Some(err),
+            PlaybackError::IO(err) => Some(err),
+        }
+    }
+}
+
 #[derive(Debug)]
 pub enum PathError {
     InteriorNull(NulError),
@@ -85,6 +96,15 @@ impl fmt::Display for PathError {
     }
 }
 
+impl Error for PathError {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        match self {
+            PathError::InteriorNull(err) => Some(err),
+            PathError::PathIsEmpty => None,
+        }
+    }
+}
+
 type SystemResult<T> = Result<T, SystemErrorCode>;
 
 #[derive(Debug)]
@@ -96,6 +116,8 @@ impl fmt::Display for SystemErrorCode {
         write!(f, "{code}")
     }
 }
+
+impl Error for SystemErrorCode {}
 
 type PacketPosition = i64;
 type PacketCount = u32;

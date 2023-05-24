@@ -1,4 +1,3 @@
-use std::fmt;
 use std::io::{self, Write};
 use std::os::fd::AsRawFd;
 
@@ -22,29 +21,6 @@ const NEW_LINE: &str = "\r\n";
 
 //TODO: Colourised meter?
 
-#[derive(Debug)]
-pub enum UIError {
-    IO(io::Error),
-}
-
-impl From<io::Error> for UIError {
-    fn from(err: io::Error) -> UIError {
-        UIError::IO(err)
-    }
-}
-
-impl fmt::Display for UIError {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        match self {
-            UIError::IO(err) => {
-                write!(f, "IO error '{err}'")
-            }
-        }
-    }
-}
-
-type UIResult = Result<(), UIError>;
-
 pub struct TerminalUI<'a> {
     stdout_fd: i32,
     handle: io::StdoutLock<'a>,
@@ -53,7 +29,7 @@ pub struct TerminalUI<'a> {
 }
 
 impl<'a> TerminalUI<'a> {
-    pub fn activate() -> Result<Self, UIError> {
+    pub fn activate() -> io::Result<Self> {
         let stdout = io::stdout();
         let mut handle = stdout.lock();
         let stdout_fd = stdout.as_raw_fd();
@@ -77,24 +53,24 @@ impl<'a> TerminalUI<'a> {
         })
     }
 
-    pub fn reset_screen(&mut self) -> UIResult {
+    pub fn reset_screen(&mut self) -> io::Result<()> {
         write!(self.handle, "{ESCAPE}{CLEAR_SCREEN}")?;
         write!(self.handle, "{ESCAPE}{MOVE_CURSOR_UPPER_LEFT}")?;
         Ok(())
     }
 
-    pub fn update_size(&mut self) -> UIResult {
+    pub fn update_size(&mut self) -> io::Result<()> {
         self.size = read_term_size(self.stdout_fd)?;
         Ok(())
     }
 
-    pub fn display_filename(&mut self, filename: &str) -> UIResult {
+    pub fn display_filename(&mut self, filename: &str) -> io::Result<()> {
         write!(self.handle, "Playing: {}", filename)?;
         write!(self.handle, "{NEW_LINE}{NEW_LINE}")?;
         Ok(())
     }
 
-    pub fn display_metadata(&mut self, metadata: &[(String, String)]) -> UIResult {
+    pub fn display_metadata(&mut self, metadata: &[(String, String)]) -> io::Result<()> {
         write!(self.handle, "Properties:")?;
         write!(self.handle, "{NEW_LINE}")?;
         for (k, v) in metadata {
@@ -104,7 +80,10 @@ impl<'a> TerminalUI<'a> {
         Ok(())
     }
 
-    pub fn display_meter(&mut self, meter_channels: impl IntoIterator<Item = f32>) -> UIResult {
+    pub fn display_meter(
+        &mut self,
+        meter_channels: impl IntoIterator<Item = f32>,
+    ) -> io::Result<()> {
         let max_bar_length = self.size.ws_col as f32;
 
         let mut channel_count = 0;
@@ -122,12 +101,12 @@ impl<'a> TerminalUI<'a> {
         Ok(())
     }
 
-    pub fn flush(&mut self) -> UIResult {
+    pub fn flush(&mut self) -> io::Result<()> {
         self.handle.flush()?;
         Ok(())
     }
 
-    pub fn deactivate(mut self) -> UIResult {
+    pub fn deactivate(mut self) -> io::Result<()> {
         set_termios(self.stdout_fd, &self.original_termios)?;
         write!(self.handle, "{ESCAPE}{CLEAR_SCREEN}")?;
         write!(self.handle, "{ESCAPE}{MOVE_CURSOR_UPPER_LEFT}")?;

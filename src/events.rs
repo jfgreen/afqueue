@@ -1,5 +1,5 @@
 use std::ffi::c_void;
-use std::fmt;
+
 use std::io;
 use std::ptr;
 
@@ -10,54 +10,6 @@ const UI_TIMER_TICK: u64 = 41;
 
 const KEVENT_BUFFER_SIZE: usize = 10;
 const INPUT_BUFFER_SIZE: usize = 10;
-
-macro_rules! event_err {
-    ($e:expr) => {{
-        let io_err = io::Error::last_os_error();
-        Err(EventError {
-            source: io_err,
-            context: $e,
-        })
-    }};
-}
-
-#[derive(Debug)]
-pub struct EventError {
-    source: io::Error,
-    context: EventErrorContext,
-}
-
-impl fmt::Display for EventError {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        let err = &self.source;
-        match &self.context {
-            EventErrorContext::Creating => {
-                write!(f, "IO error creating kqueue '{err}'")
-            }
-            EventErrorContext::Adding => {
-                write!(f, "IO error adding kqueue event filter '{err}'")
-            }
-            EventErrorContext::Triggering => {
-                write!(f, "IO error triggering kqueue event '{err}'")
-            }
-            EventErrorContext::Enabling => {
-                write!(f, "IO error enabling kqueue event '{err}'")
-            }
-            EventErrorContext::Closing => {
-                write!(f, "IO error closing kqueue '{err}'")
-            }
-        }
-    }
-}
-
-#[derive(Debug)]
-pub enum EventErrorContext {
-    Creating,
-    Adding,
-    Triggering,
-    Enabling,
-    Closing,
-}
 
 pub enum Event {
     NextTrackKeyPressed,
@@ -76,7 +28,7 @@ pub struct Sender {
 }
 
 impl Sender {
-    pub fn trigger_playback_finished_event(&mut self) -> Result<(), EventError> {
+    pub fn trigger_playback_finished_event(&mut self) -> io::Result<()> {
         //TODO: Extract function for writing to kqueue
         unsafe {
             let playback_finished_event = Kevent {
@@ -100,7 +52,7 @@ impl Sender {
             );
 
             if result < 0 {
-                return event_err!(EventErrorContext::Triggering);
+                return Err(io::Error::last_os_error());
             }
             Ok(())
         }
@@ -150,7 +102,7 @@ impl Receiver {
         }
     }
 
-    pub fn enable_ui_timer_event(&mut self, usec: i64) -> Result<(), EventError> {
+    pub fn enable_ui_timer_event(&mut self, usec: i64) -> io::Result<()> {
         unsafe {
             let ui_timer_event = Kevent {
                 ident: UI_TIMER_TICK,
@@ -173,13 +125,13 @@ impl Receiver {
             );
 
             if result < 0 {
-                return event_err!(EventErrorContext::Enabling);
+                return Err(io::Error::last_os_error());
             }
             Ok(())
         }
     }
 
-    pub fn disable_ui_timer_event(&mut self) -> Result<(), EventError> {
+    pub fn disable_ui_timer_event(&mut self) -> io::Result<()> {
         unsafe {
             let ui_timer_event = Kevent {
                 ident: UI_TIMER_TICK,
@@ -202,18 +154,18 @@ impl Receiver {
             );
 
             if result < 0 {
-                return event_err!(EventErrorContext::Enabling);
+                return Err(io::Error::last_os_error());
             }
             Ok(())
         }
     }
 
-    pub fn close(self) -> Result<(), EventError> {
+    pub fn close(self) -> io::Result<()> {
         //TODO: Could this be drop instead?
         unsafe {
             let result = kq::close(self.queue);
             if result < 0 {
-                return event_err!(EventErrorContext::Closing);
+                Err(io::Error::last_os_error())
             } else {
                 Ok(())
             }
@@ -223,12 +175,12 @@ impl Receiver {
 
 //TODO: Refactor, think about abstractions that might make it a little easier
 // to follow
-pub fn build_event_queue() -> Result<(Sender, Receiver), EventError> {
+pub fn build_event_queue() -> io::Result<(Sender, Receiver)> {
     unsafe {
         // Create a new Kqueue
         let kqueue = kqueue();
         if kqueue < 0 {
-            return event_err!(EventErrorContext::Creating);
+            return Err(io::Error::last_os_error());
         }
 
         // Describe the events we are interested in...
@@ -280,7 +232,7 @@ pub fn build_event_queue() -> Result<(Sender, Receiver), EventError> {
         );
 
         if result < 0 {
-            return event_err!(EventErrorContext::Adding);
+            return Err(io::Error::last_os_error());
         }
 
         let sender = Sender { queue: kqueue };

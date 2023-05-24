@@ -13,11 +13,13 @@ mod ffi {
 }
 
 mod boombox;
+mod error;
 mod events;
 mod player;
 mod ui;
 
-use boombox::{Boombox, BoomboxError};
+use boombox::Boombox;
+use error::AfqueueError;
 
 use std::ops::ControlFlow::Continue;
 use std::{env, process};
@@ -44,7 +46,7 @@ fn parse_args(args: impl IntoIterator<Item = String>) -> impl Iterator<Item = St
     args
 }
 
-fn play_audio_files(paths: impl IntoIterator<Item = String>) -> Result<(), BoomboxError> {
+fn play_audio_files(paths: impl IntoIterator<Item = String>) -> Result<(), AfqueueError> {
     let mut boombox = Boombox::initialise()?;
 
     let mut result = Ok(Continue(()));

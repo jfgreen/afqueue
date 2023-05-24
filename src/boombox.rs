@@ -1,62 +1,16 @@
 //! Boombox implements the overall music listening experiance by bringing
 //! together the event system, user interface and audio file player
 
-use std::fmt;
 use std::ops::ControlFlow::{self, Break, Continue};
 
-use crate::events::{self, Event, EventError};
-use crate::player::{PlaybackContext, PlaybackError, PlaybackVolume};
-use crate::ui::{TerminalUI, UIError};
+use crate::error::{AfqueueError, ErrorContext, ErrorCtx};
+use crate::events::{self, Event};
+use crate::player::{PlaybackContext, PlaybackVolume};
+use crate::ui::TerminalUI;
 
 const UI_TICK_DURATION_MICROSECONDS: i64 = 33333; // 30FPS
 
-#[derive(Debug)]
-pub struct BoomboxError {
-    //TODO: Context could be enum
-    context: String,
-    reason: BoomboxErrorReason,
-}
-
-impl fmt::Display for BoomboxError {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        match &self.reason {
-            BoomboxErrorReason::Playback(err) => {
-                write!(f, "Playback failure while {}, {}", self.context, err)
-            }
-            BoomboxErrorReason::UI(err) => {
-                write!(f, "UI failure while {}, {}", self.context, err)
-            }
-            BoomboxErrorReason::Event(err) => {
-                write!(f, "Event loop failure while {}, {}", self.context, err)
-            }
-        }
-    }
-}
-
-#[derive(Debug)]
-pub enum BoomboxErrorReason {
-    Playback(PlaybackError),
-    UI(UIError),
-    Event(EventError),
-}
-
-impl From<PlaybackError> for BoomboxErrorReason {
-    fn from(err: PlaybackError) -> BoomboxErrorReason {
-        BoomboxErrorReason::Playback(err)
-    }
-}
-
-impl From<UIError> for BoomboxErrorReason {
-    fn from(err: UIError) -> BoomboxErrorReason {
-        BoomboxErrorReason::UI(err)
-    }
-}
-
-impl From<EventError> for BoomboxErrorReason {
-    fn from(err: EventError) -> BoomboxErrorReason {
-        BoomboxErrorReason::Event(err)
-    }
-}
+//TODO: Figure out what error context is useful to add to the below
 
 //TODO: Can we get away without the lifetime?
 pub struct Boombox<'a> {
@@ -67,17 +21,7 @@ pub struct Boombox<'a> {
 }
 
 impl<'a> Boombox<'a> {
-    pub fn initialise() -> Result<Self, BoomboxError> {
-        Boombox::init().map_err(|err| BoomboxError {
-            //TODO: This feels a bit forced?
-            context: String::from("getting ready for playback"),
-            reason: err,
-        })
-    }
-
-    //TODO: Error structure still feels a bit off...
-    //Is there a way we can just return a BoomboxError from here?
-    fn init() -> Result<Self, BoomboxErrorReason> {
+    pub fn initialise() -> Result<Self, AfqueueError> {
         //TODO: Pass in file descriptor to build_event_queue
         //TODO: sender and reader are not that accurate names
         let (event_sender, event_reader) = events::build_event_queue()?;
@@ -90,14 +34,12 @@ impl<'a> Boombox<'a> {
     }
 
     //TODO: Might it be nicer for boombox to pull from a playlist?
-    pub fn play_file(&mut self, path: &str) -> Result<ControlFlow<()>, BoomboxError> {
-        self.play(path).map_err(|err| BoomboxError {
-            context: format!("playing back file '{path}'"),
-            reason: err,
-        })
+    pub fn play_file(&mut self, path: &str) -> Result<ControlFlow<()>, AfqueueError> {
+        self.play(path)
+            .with(ErrorCtx::PlayingBack(path.to_string()))
     }
 
-    fn play(&mut self, path: &str) -> Result<ControlFlow<()>, BoomboxErrorReason> {
+    fn play(&mut self, path: &str) -> Result<ControlFlow<()>, AfqueueError> {
         let context = PlaybackContext::new(path)?;
         let metadata = context.file_metadata()?;
         let mut meter_state = context.new_meter_state();
@@ -190,14 +132,7 @@ impl<'a> Boombox<'a> {
         }
     }
 
-    pub fn shutdown(self) -> Result<(), BoomboxError> {
-        self.stop().map_err(|err| BoomboxError {
-            context: String::from("shutting down"),
-            reason: err,
-        })
-    }
-
-    fn stop(self) -> Result<(), BoomboxErrorReason> {
+    pub fn shutdown(self) -> Result<(), AfqueueError> {
         self.event_reader.close()?;
         self.ui.deactivate()?;
         Ok(())
