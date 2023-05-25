@@ -664,7 +664,7 @@ fn audio_file_read_magic_cookie(file: AudioFileID) -> SystemResult<Option<Vec<u8
         );
 
         // No magic cookie data
-        if status == audio_toolbox::AUDIO_FILE_ERROR_UNSUPPORTED_PROPERTY {
+        if status == audio_toolbox::AUDIO_FILE_ERROR_UNSUPPORTED_PROPERTY || cookie_size == 0 {
             return Ok(None);
         }
 
