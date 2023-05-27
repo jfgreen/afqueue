@@ -86,11 +86,13 @@ impl<'a> Boombox<'a> {
                     self.volume.decrement();
                     player.set_volume(&self.volume)?;
                     self.ui.display_volume(self.volume.gain())?;
+                    self.ui.flush()?;
                 }
                 Event::VolumeUpKeyPressed => {
                     self.volume.increment();
                     player.set_volume(&self.volume)?;
                     self.ui.display_volume(self.volume.gain())?;
+                    self.ui.flush()?;
                 }
                 Event::NextTrackKeyPressed => {
                     player.stop()?;

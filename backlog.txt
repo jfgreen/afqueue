@@ -20,4 +20,3 @@ Consider handling multi channel files with kAudioFilePropertyChannelLayout, kAud
 Add a debug mode / toggle showing things like the audio stream basic description, buffer size, packets per buffer
 Fix freeze when external drive is removed
 Explore what meaningful tests looks like
-Fix volume not updating on UI while paused
