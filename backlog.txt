@@ -1,5 +1,4 @@
 Rename to something fun.
-Write a readme.
 Make VU meter an optional feature that can be toggled on and off.
 Display playback time.
 Show the queued up files.
