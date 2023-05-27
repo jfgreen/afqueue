@@ -392,7 +392,7 @@ impl PlaybackVolume {
         self.volume = cmp::max(self.volume.saturating_sub(VOLUME_STEP), 0);
     }
 
-    fn gain(&self) -> f32 {
+    pub fn gain(&self) -> f32 {
         self.volume as f32 / MAX_VOLUME as f32
     }
 }
@@ -402,6 +402,10 @@ pub struct MeterState(Box<[AudioQueueLevelMeterState]>);
 impl MeterState {
     pub fn levels(&self) -> impl IntoIterator<Item = f32> + '_ {
         self.0.iter().map(|channel| channel.average_power)
+    }
+
+    pub fn channel_count(&self) -> usize {
+        self.0.len()
     }
 
     fn update(&mut self, output_queue: AudioQueueRef) -> PlaybackResult<()> {

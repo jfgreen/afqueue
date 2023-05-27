@@ -14,8 +14,7 @@ const HIDE_CURSOR: &str = "?25l";
 const SHOW_CURSOR: &str = "?25h";
 const CLEAR_SCREEN: &str = "2J";
 const CLEAR_LINE_REMAINDER: &str = "K";
-const MOVE_CURSOR_UPPER_LEFT: &str = ";f";
-const MOVE_CURSOR_UP_LINES: &str = "A";
+const MOVE_CURSOR: &str = "H";
 
 const NEW_LINE: &str = "\r\n";
 
@@ -26,6 +25,10 @@ pub struct TerminalUI<'a> {
     handle: io::StdoutLock<'a>,
     original_termios: Termios,
     size: WinSize,
+    filename_row: usize,
+    meter_row: usize,
+    volume_row: usize,
+    metadata_row: usize,
 }
 
 impl<'a> TerminalUI<'a> {
@@ -50,13 +53,24 @@ impl<'a> TerminalUI<'a> {
             handle,
             original_termios,
             size,
+            filename_row: 0,
+            meter_row: 0,
+            volume_row: 0,
+            metadata_row: 0,
         })
     }
 
-    pub fn reset_screen(&mut self) -> io::Result<()> {
+    pub fn clear_screen(&mut self) -> io::Result<()> {
         write!(self.handle, "{ESCAPE}{CLEAR_SCREEN}")?;
-        write!(self.handle, "{ESCAPE}{MOVE_CURSOR_UPPER_LEFT}")?;
         Ok(())
+    }
+
+    pub fn update_layout(&mut self, meter_rows: usize) {
+        let row_gap = 2;
+        self.filename_row = 1;
+        self.meter_row = self.filename_row + row_gap;
+        self.volume_row = self.meter_row + meter_rows + row_gap;
+        self.metadata_row = self.volume_row + row_gap;
     }
 
     pub fn update_size(&mut self) -> io::Result<()> {
@@ -65,18 +79,8 @@ impl<'a> TerminalUI<'a> {
     }
 
     pub fn display_filename(&mut self, filename: &str) -> io::Result<()> {
+        write!(self.handle, "{ESCAPE}{};1{MOVE_CURSOR}", self.filename_row)?;
         write!(self.handle, "Playing: {}", filename)?;
-        write!(self.handle, "{NEW_LINE}{NEW_LINE}")?;
-        Ok(())
-    }
-
-    pub fn display_metadata(&mut self, metadata: &[(String, String)]) -> io::Result<()> {
-        write!(self.handle, "Properties:")?;
-        write!(self.handle, "{NEW_LINE}")?;
-        for (k, v) in metadata {
-            write!(self.handle, "{k}: {v}")?;
-            write!(self.handle, "{NEW_LINE}")?;
-        }
         Ok(())
     }
 
@@ -84,11 +88,10 @@ impl<'a> TerminalUI<'a> {
         &mut self,
         meter_channels: impl IntoIterator<Item = f32>,
     ) -> io::Result<()> {
+        write!(self.handle, "{ESCAPE}{};1{MOVE_CURSOR}", self.meter_row)?;
         let max_bar_length = self.size.ws_col as f32;
 
-        let mut channel_count = 0;
         for channel_power in meter_channels {
-            channel_count += 1;
             let bar_length = (max_bar_length * channel_power) as usize;
             write!(self.handle, "{NEW_LINE}")?;
             for _ in 0..bar_length {
@@ -97,7 +100,25 @@ impl<'a> TerminalUI<'a> {
             write!(self.handle, "{ESCAPE}{CLEAR_LINE_REMAINDER}")?;
         }
 
-        write!(self.handle, "{ESCAPE}{channel_count}{MOVE_CURSOR_UP_LINES}")?;
+        Ok(())
+    }
+
+    pub fn display_volume(&mut self, volume: f32) -> io::Result<()> {
+        write!(self.handle, "{ESCAPE}{};1{MOVE_CURSOR}", self.volume_row)?;
+        let vol_percent = volume * 100.0;
+        write!(self.handle, "Volume: {vol_percent}%")?;
+        write!(self.handle, "{ESCAPE}{CLEAR_LINE_REMAINDER}")?;
+        Ok(())
+    }
+
+    pub fn display_metadata(&mut self, metadata: &[(String, String)]) -> io::Result<()> {
+        write!(self.handle, "{ESCAPE}{};1{MOVE_CURSOR}", self.metadata_row)?;
+        write!(self.handle, "Properties:")?;
+        write!(self.handle, "{NEW_LINE}")?;
+        for (k, v) in metadata {
+            write!(self.handle, "{k}: {v}")?;
+            write!(self.handle, "{NEW_LINE}")?;
+        }
         Ok(())
     }
 
@@ -109,7 +130,7 @@ impl<'a> TerminalUI<'a> {
     pub fn deactivate(mut self) -> io::Result<()> {
         set_termios(self.stdout_fd, &self.original_termios)?;
         write!(self.handle, "{ESCAPE}{CLEAR_SCREEN}")?;
-        write!(self.handle, "{ESCAPE}{MOVE_CURSOR_UPPER_LEFT}")?;
+        write!(self.handle, "{ESCAPE}1;1{MOVE_CURSOR}")?;
         write!(self.handle, "{ESCAPE}{SHOW_CURSOR}")?;
         write!(self.handle, "{ESCAPE}{AUTOWRAP_ENABLE}")?;
         self.handle.flush()?;

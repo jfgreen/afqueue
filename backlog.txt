@@ -9,14 +9,15 @@ Display keybindings when the user presses '?' or simmilar.
 Allow seeking within a song.
 Rework input processing to allow arrow keys to be used.
 Rethink key mapping.
-Display current playback volume.
 Keep on top of tech debt / todos / rough edges.
 Refine error handling?
 Make a diagram of how the different moving parts interact.
 Check for memory leaks over time
 Check for orphaned threads over time
+Fix broken rendering on small terminals (i.e truncating rows)
 Investigate using kAudioFilePropertyFormatList to deal with multi format files
 Consider handling multi channel files with kAudioFilePropertyChannelLayout, kAudioQueueProperty_ChannelLayout.
 Add a debug mode / toggle showing things like the audio stream basic description, buffer size, packets per buffer
 Fix freeze when external drive is removed
-Explore what meaninful tests looks like
+Explore what meaningful tests looks like
+Fix volume not updating on UI while paused

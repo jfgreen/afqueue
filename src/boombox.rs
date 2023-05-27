@@ -54,9 +54,12 @@ impl<'a> Boombox<'a> {
         let mut exit_requested = false;
         let mut paused = false;
 
-        self.ui.reset_screen()?;
+        self.ui.update_layout(meter_state.channel_count());
+        self.ui.clear_screen()?;
         self.ui.display_filename(path)?;
         self.ui.display_metadata(&metadata)?;
+        self.ui.display_volume(self.volume.gain())?;
+        self.ui.flush()?;
 
         player.set_volume(&self.volume)?;
         player.start_playback()?;
@@ -82,10 +85,12 @@ impl<'a> Boombox<'a> {
                 Event::VolumeDownKeyPressed => {
                     self.volume.decrement();
                     player.set_volume(&self.volume)?;
+                    self.ui.display_volume(self.volume.gain())?;
                 }
                 Event::VolumeUpKeyPressed => {
                     self.volume.increment();
                     player.set_volume(&self.volume)?;
+                    self.ui.display_volume(self.volume.gain())?;
                 }
                 Event::NextTrackKeyPressed => {
                     player.stop()?;
@@ -117,11 +122,11 @@ impl<'a> Boombox<'a> {
                     timer_set = true;
                 }
                 Event::TerminalResized => {
-                    //TODO: Make UI hold on to current metadata/state, resize current bar
                     self.ui.update_size()?;
-                    self.ui.reset_screen()?;
+                    self.ui.clear_screen()?;
                     self.ui.display_filename(path)?;
                     self.ui.display_metadata(&metadata)?;
+                    self.ui.display_volume(self.volume.gain())?;
                 }
             }
         }
