@@ -22,51 +22,14 @@ pub enum Event {
     TerminalResized,
 }
 
-#[derive(Clone)]
-pub struct Sender {
-    queue: Kqueue,
-}
-
-impl Sender {
-    pub fn trigger_playback_finished_event(&mut self) -> io::Result<()> {
-        //TODO: Extract function for writing to kqueue
-        unsafe {
-            let playback_finished_event = Kevent {
-                ident: AUDIO_QUEUE_PLAYBACK_FINISHED,
-                filter: kq::EVFILT_USER,
-                flags: 0,
-                fflags: kq::NOTE_TRIGGER,
-                data: 0,
-                udata: 0,
-            };
-
-            let changelist = [playback_finished_event];
-
-            let result = kevent(
-                self.queue,
-                changelist.as_ptr(),
-                changelist.len() as i32,
-                ptr::null_mut(),
-                0,
-                ptr::null(),
-            );
-
-            if result < 0 {
-                return Err(io::Error::last_os_error());
-            }
-            Ok(())
-        }
-    }
-}
-
-pub struct Receiver {
+pub struct EventQueue {
     queue: Kqueue,
     queue_reader: KQueueReader,
     input_reader: InputReader,
 }
 
-impl Receiver {
-    pub fn next(&mut self) -> Event {
+impl EventQueue {
+    pub fn next_event(&mut self) -> Event {
         // To get the next event we:
         // - Start by taking the next buffered char from stdin.
         // - If this char maps to a valid event then return, otherwise try again.
@@ -100,6 +63,10 @@ impl Receiver {
                 _ => continue,
             }
         }
+    }
+
+    pub fn create_callback_notifier(&self) -> CallbackNotifier {
+        CallbackNotifier { queue: self.queue }
     }
 
     pub fn enable_ui_timer_event(&mut self, usec: i64) -> io::Result<()> {
@@ -173,9 +140,45 @@ impl Receiver {
     }
 }
 
+#[derive(Clone)]
+pub struct CallbackNotifier {
+    queue: Kqueue,
+}
+
+impl CallbackNotifier {
+    pub fn trigger_playback_finished_event(&mut self) -> io::Result<()> {
+        //TODO: Extract function for writing to kqueue
+        unsafe {
+            let playback_finished_event = Kevent {
+                ident: AUDIO_QUEUE_PLAYBACK_FINISHED,
+                filter: kq::EVFILT_USER,
+                flags: 0,
+                fflags: kq::NOTE_TRIGGER,
+                data: 0,
+                udata: 0,
+            };
+
+            let changelist = [playback_finished_event];
+
+            let result = kevent(
+                self.queue,
+                changelist.as_ptr(),
+                changelist.len() as i32,
+                ptr::null_mut(),
+                0,
+                ptr::null(),
+            );
+
+            if result < 0 {
+                return Err(io::Error::last_os_error());
+            }
+            Ok(())
+        }
+    }
+}
 //TODO: Refactor, think about abstractions that might make it a little easier
 // to follow
-pub fn build_event_queue() -> io::Result<(Sender, Receiver)> {
+pub fn build_event_queue() -> io::Result<EventQueue> {
     unsafe {
         // Create a new Kqueue
         let kqueue = kqueue();
@@ -235,15 +238,13 @@ pub fn build_event_queue() -> io::Result<(Sender, Receiver)> {
             return Err(io::Error::last_os_error());
         }
 
-        let sender = Sender { queue: kqueue };
-
-        let receiver = Receiver {
+        let handle = EventQueue {
             queue: kqueue,
             queue_reader: KQueueReader::new(kqueue),
             input_reader: InputReader::new(kq::STDIN_FILE_NUM as i32),
         };
 
-        Ok((sender, receiver))
+        Ok(handle)
     }
 }
 

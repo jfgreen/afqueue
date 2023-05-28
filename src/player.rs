@@ -14,7 +14,7 @@ use crate::ffi::audio_toolbox::{
     AudioQueueRef, AudioStreamBasicDescription,
 };
 
-use crate::events;
+use crate::events::CallbackNotifier;
 use crate::ffi::core_foundation;
 
 pub type PlaybackResult<T> = Result<T, PlaybackError>;
@@ -184,11 +184,11 @@ impl PlaybackContext {
         audio_file_read_metadata(self.playback_file).map_err(|e| e.into())
     }
 
-    pub fn new_audio_callback_handler(&self, event_sender: events::Sender) -> AudioCallbackHandler {
+    pub fn new_audio_callback_handler(&self, notifier: CallbackNotifier) -> AudioCallbackHandler {
         AudioCallbackHandler {
             playback_file: self.playback_file,
             is_vbr: self.is_vbr,
-            event_sender,
+            notifier,
             packets_per_buffer: self.packets_per_buffer,
             current_packet: 0,
             finished: false,
@@ -249,7 +249,7 @@ impl Drop for PlaybackContext {
 pub struct AudioCallbackHandler {
     playback_file: AudioFileID,
     is_vbr: bool,
-    event_sender: events::Sender,
+    notifier: CallbackNotifier,
     packets_per_buffer: PacketCount,
     current_packet: PacketPosition,
     finished: bool,
@@ -309,7 +309,7 @@ impl AudioCallbackHandler {
     fn handle_running_state_change(&mut self, audio_queue: AudioQueueRef) {
         match audio_queue_read_run_state(audio_queue) {
             Ok(AUDIO_QUEUE_RUN_STATE_STOPPED) => {
-                self.event_sender
+                self.notifier
                     .trigger_playback_finished_event()
                     .expect("failed to trigger playback event");
             }

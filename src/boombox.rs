@@ -4,7 +4,7 @@
 use std::ops::ControlFlow::{self, Break, Continue};
 
 use crate::error::{AfqueueError, ErrorContext, ErrorCtx};
-use crate::events::{self, Event};
+use crate::events::{self, Event, EventQueue};
 use crate::player::{PlaybackContext, PlaybackVolume};
 use crate::ui::TerminalUI;
 
@@ -14,8 +14,7 @@ const UI_TICK_DURATION_MICROSECONDS: i64 = 33333; // 30FPS
 
 //TODO: Can we get away without the lifetime?
 pub struct Boombox<'a> {
-    event_sender: events::Sender,
-    event_reader: events::Receiver,
+    queue: EventQueue,
     ui: TerminalUI<'a>,
     volume: PlaybackVolume,
 }
@@ -23,11 +22,9 @@ pub struct Boombox<'a> {
 impl<'a> Boombox<'a> {
     pub fn initialise() -> Result<Self, AfqueueError> {
         //TODO: Pass in file descriptor to build_event_queue
-        //TODO: sender and reader are not that accurate names
-        let (event_sender, event_reader) = events::build_event_queue()?;
+        let queue = events::build_event_queue()?;
         Ok(Boombox {
-            event_sender,
-            event_reader,
+            queue,
             ui: TerminalUI::activate()?,
             volume: PlaybackVolume::new(),
         })
@@ -43,12 +40,13 @@ impl<'a> Boombox<'a> {
         let context = PlaybackContext::new(path)?;
         let metadata = context.file_metadata()?;
         let mut meter_state = context.new_meter_state();
-        let mut handler = context.new_audio_callback_handler(self.event_sender.clone());
+        let notifier = self.queue.create_callback_notifier();
+        let mut handler = context.new_audio_callback_handler(notifier);
         let mut player = context.new_audio_player(&mut handler)?;
 
         //TODO: Is there a way of making enabling and disabling the timer using
         // idempotent operations so we dont have to track if we have set it or not?
-        self.event_reader
+        self.queue
             .enable_ui_timer_event(UI_TICK_DURATION_MICROSECONDS)?;
         let mut timer_set = true;
         let mut exit_requested = false;
@@ -67,19 +65,19 @@ impl<'a> Boombox<'a> {
         player.start_playback()?;
 
         'event_loop: loop {
-            let event = self.event_reader.next();
+            let event = self.queue.next_event();
 
             match event {
                 Event::PauseKeyPressed => {
                     if paused {
                         player.resume()?;
                         //TODO: Minus time since last tick?
-                        self.event_reader
+                        self.queue
                             .enable_ui_timer_event(UI_TICK_DURATION_MICROSECONDS)?;
                         timer_set = true;
                     } else {
                         player.pause()?;
-                        self.event_reader.disable_ui_timer_event()?;
+                        self.queue.disable_ui_timer_event()?;
                         timer_set = false;
                     }
                     paused = !paused;
@@ -106,9 +104,8 @@ impl<'a> Boombox<'a> {
                     exit_requested = true;
                 }
                 Event::PlaybackFinished => {
-                    //TODO: Is event_reader that accurate a name?
                     if timer_set {
-                        self.event_reader.disable_ui_timer_event()?;
+                        self.queue.disable_ui_timer_event()?;
                     }
                     break 'event_loop;
                 }
@@ -123,7 +120,7 @@ impl<'a> Boombox<'a> {
                     self.ui.flush()?;
                     //TODO: Figure out propper timestep that takes into account time spent updating
                     // UI, and general timer inaccuracy
-                    self.event_reader
+                    self.queue
                         .enable_ui_timer_event(UI_TICK_DURATION_MICROSECONDS)?;
                     timer_set = true;
                 }
@@ -147,7 +144,7 @@ impl<'a> Boombox<'a> {
     }
 
     pub fn shutdown(self) -> Result<(), AfqueueError> {
-        self.event_reader.close()?;
+        self.queue.close()?;
         self.ui.deactivate()?;
         Ok(())
     }
