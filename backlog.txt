@@ -2,7 +2,6 @@ Rename to something fun.
 Make VU meter an optional feature that can be toggled on and off.
 Display playback time.
 Show the queued up files.
-Display player state (i.e when paused).
 Add some cool little animation.
 Display keybindings when the user presses '?' or simmilar.
 Allow seeking within a song.
@@ -19,3 +18,4 @@ Consider handling multi channel files with kAudioFilePropertyChannelLayout, kAud
 Add a debug mode / toggle showing things like the audio stream basic description, buffer size, packets per buffer
 Fix freeze when external drive is removed
 Explore what meaningful tests looks like
+Figure out UI layout

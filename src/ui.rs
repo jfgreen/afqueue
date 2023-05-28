@@ -27,6 +27,7 @@ pub struct TerminalUI<'a> {
     size: WinSize,
     filename_row: usize,
     meter_row: usize,
+    status_row: usize,
     volume_row: usize,
     metadata_row: usize,
 }
@@ -55,6 +56,7 @@ impl<'a> TerminalUI<'a> {
             size,
             filename_row: 0,
             meter_row: 0,
+            status_row: 0,
             volume_row: 0,
             metadata_row: 0,
         })
@@ -69,7 +71,8 @@ impl<'a> TerminalUI<'a> {
         let row_gap = 2;
         self.filename_row = 1;
         self.meter_row = self.filename_row + row_gap;
-        self.volume_row = self.meter_row + meter_rows + row_gap;
+        self.status_row = self.meter_row + meter_rows + row_gap;
+        self.volume_row = self.status_row + 1;
         self.metadata_row = self.volume_row + row_gap;
     }
 
@@ -100,6 +103,16 @@ impl<'a> TerminalUI<'a> {
             write!(self.handle, "{ESCAPE}{CLEAR_LINE_REMAINDER}")?;
         }
 
+        Ok(())
+    }
+
+    pub fn display_playback_state(&mut self, paused: bool) -> io::Result<()> {
+        write!(self.handle, "{ESCAPE}{};1{MOVE_CURSOR}", self.status_row)?;
+        if paused {
+            write!(self.handle, "⏸")?;
+        } else {
+            write!(self.handle, "⏵")?;
+        }
         Ok(())
     }
 

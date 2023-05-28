@@ -57,8 +57,10 @@ impl<'a> Boombox<'a> {
         self.ui.update_layout(meter_state.channel_count());
         self.ui.clear_screen()?;
         self.ui.display_filename(path)?;
-        self.ui.display_metadata(&metadata)?;
+        self.ui.display_meter(meter_state.levels())?;
+        self.ui.display_playback_state(paused)?;
         self.ui.display_volume(self.volume.gain())?;
+        self.ui.display_metadata(&metadata)?;
         self.ui.flush()?;
 
         player.set_volume(&self.volume)?;
@@ -81,6 +83,8 @@ impl<'a> Boombox<'a> {
                         timer_set = false;
                     }
                     paused = !paused;
+                    self.ui.display_playback_state(paused)?;
+                    self.ui.flush()?;
                 }
                 Event::VolumeDownKeyPressed => {
                     self.volume.decrement();
@@ -127,8 +131,11 @@ impl<'a> Boombox<'a> {
                     self.ui.update_size()?;
                     self.ui.clear_screen()?;
                     self.ui.display_filename(path)?;
-                    self.ui.display_metadata(&metadata)?;
+                    self.ui.display_meter(meter_state.levels())?;
+                    self.ui.display_playback_state(paused)?;
                     self.ui.display_volume(self.volume.gain())?;
+                    self.ui.display_metadata(&metadata)?;
+                    self.ui.flush()?;
                 }
             }
         }
