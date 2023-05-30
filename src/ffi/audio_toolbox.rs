@@ -357,13 +357,25 @@ pub type AudioQueuePropertyListenerProc = unsafe extern "C" fn(
     in_id: AudioQueuePropertyID,
 );
 
+/// A reference to an audio queue timeline.
+///
+/// An audio queue timeline can be used to observe any overloads or
+/// discontinuities in the audio device associated with an audio queue.
+/// For example a period of silence caused by a processing overload or change in
+/// device state.
+pub type AudioQueueTimelineRef = *const OpaqueAudioQueueTimeline;
+
 #[link(name = "AudioToolbox", kind = "framework")]
 extern "C" {
 
     /// An opaque data type that represents an audio file.
     pub type OpaqueAudioFileID;
+
     /// An opaque data type that represents an audio queue.
     pub type OpaqueAudioQueue;
+
+    /// An opaque data type that represents an audio queue timeline.
+    pub type OpaqueAudioQueueTimeline;
 
     /// Open an audio file with the AudioToolbox framework.
     ///
@@ -691,4 +703,27 @@ extern "C" {
         in_param_id: AudioQueueParameterID,
         in_value: AudioQueueParameterValue,
     ) -> OSStatus;
+
+    /// Get the current time from an audio queue
+    ///
+    /// Write to `out_timestamp` an `AudioTimeStamp` holding the current time of
+    /// the audio queue specified by `in_aq`. The `sample_time` field of the
+    /// resulting struct will be in terms of the audio queues sample rate and be
+    /// relative to when the audio queue has started or will start.
+    ///
+    /// Providing a timeline object via the `in_timeline` parameter will enable
+    /// notification of timeline discontinuitites. The flag pointed to by the
+    /// `out_timeline_discontinuity` parameter will be set to true if
+    /// discontinuities have occurred.
+    ///
+    /// If discontinuitiy information is not required then a null pointer can be
+    /// passed to `in_timeline` and `out_timeline_discontinuity`.
+    #[link_name = "AudioQueueGetCurrentTime"]
+    pub fn audio_queue_get_current_time(
+        in_aq: AudioQueueRef,
+        in_timeline: AudioQueueTimelineRef,
+        out_time_stamp: *mut AudioTimeStamp,
+        out_timeline_discontinuity: *mut bool,
+    ) -> OSStatus;
+
 }
