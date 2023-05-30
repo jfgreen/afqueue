@@ -98,6 +98,9 @@ pub const AUDIO_QUEUE_PROPERTY_MAGIC_COOKIE_DATA: AudioQueuePropertyID = u4cc!(*
 /// This constant can be used to access a read only audio queue property
 /// indicating if an audio queue is running.
 ///
+/// A nonzero value means the queue is running, and a 0 value means the queue is
+/// stopped.
+///
 /// The value of this property is represented by `u32`.
 pub const AUDIO_QUEUE_PROPERTY_IS_RUNNING: AudioQueuePropertyID = u4cc!(*b"aqrn");
 
