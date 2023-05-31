@@ -230,6 +230,7 @@ impl PlaybackContext {
         Ok(AudioFilePlayer {
             output_queue,
             handler: PhantomData,
+            sample_rate: self.format.sample_rate,
         })
     }
 
@@ -336,6 +337,7 @@ impl AudioCallbackHandler {
 pub struct AudioFilePlayer<'a> {
     output_queue: AudioQueueRef,
     handler: PhantomData<&'a mut AudioCallbackHandler>,
+    sample_rate: f64,
 }
 
 impl<'a> AudioFilePlayer<'a> {
@@ -374,8 +376,8 @@ impl<'a> AudioFilePlayer<'a> {
     }
 
     pub fn get_playback_time(&mut self) -> PlaybackResult<Option<f64>> {
-        //TODO: Use sample rate to translate into playback progress
         let time = audio_queue_read_current_sample_time(self.output_queue)?;
+        let time = time.map(|t| t / self.sample_rate);
         Ok(time)
     }
 }

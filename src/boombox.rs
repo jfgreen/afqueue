@@ -72,6 +72,7 @@ impl<'a> Boombox<'a> {
 
             match event {
                 Event::PauseKeyPressed => {
+                    //TODO: Might be worth updating playback progress on pause
                     if paused {
                         player.resume()?;
                     } else {
