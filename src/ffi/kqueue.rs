@@ -33,7 +33,6 @@ pub const EVFILT_SIGNAL: i16 = -6;
 pub const EV_ADD: u16 = 0x1;
 pub const EV_DELETE: u16 = 0x2;
 pub const EV_ENABLE: u16 = 0x4;
-pub const EV_ONESHOT: u16 = 0x10;
 pub const EV_CLEAR: u16 = 0x20;
 pub const NOTE_TRIGGER: u32 = 0x01000000;
 pub const NOTE_USECONDS: u32 = 0x00000002;

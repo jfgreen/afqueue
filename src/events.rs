@@ -5,18 +5,21 @@ use std::ptr;
 
 use crate::ffi::kqueue::{self as kq, kevent, kqueue, Kevent, Kqueue};
 
+const AUDIO_QUEUE_PLAYBACK_STARTED: u64 = 39;
 const AUDIO_QUEUE_PLAYBACK_FINISHED: u64 = 40;
 const UI_TIMER_TICK: u64 = 41;
 
 const KEVENT_BUFFER_SIZE: usize = 10;
 const INPUT_BUFFER_SIZE: usize = 10;
 
+#[derive(Debug)]
 pub enum Event {
     NextTrackKeyPressed,
     PauseKeyPressed,
     ExitKeyPressed,
     VolumeUpKeyPressed,
     VolumeDownKeyPressed,
+    PlaybackStarted,
     PlaybackFinished,
     UITick,
     TerminalResized,
@@ -57,6 +60,7 @@ impl EventQueue {
                     self.input_reader.fill_buffer();
                     continue;
                 }
+                (AUDIO_QUEUE_PLAYBACK_STARTED, kq::EVFILT_USER) => return Event::PlaybackStarted,
                 (AUDIO_QUEUE_PLAYBACK_FINISHED, kq::EVFILT_USER) => return Event::PlaybackFinished,
                 (UI_TIMER_TICK, kq::EVFILT_TIMER) => return Event::UITick,
                 (kq::SIGWINCH, kq::EVFILT_SIGNAL) => return Event::TerminalResized,
@@ -74,7 +78,7 @@ impl EventQueue {
             let ui_timer_event = Kevent {
                 ident: UI_TIMER_TICK,
                 filter: kq::EVFILT_TIMER,
-                flags: kq::EV_ADD | kq::EV_ENABLE | kq::EV_ONESHOT,
+                flags: kq::EV_ADD | kq::EV_ENABLE,
                 fflags: kq::NOTE_USECONDS,
                 data: usec,
                 udata: 0,
@@ -146,6 +150,35 @@ pub struct CallbackNotifier {
 }
 
 impl CallbackNotifier {
+    pub fn trigger_playback_started_event(&mut self) -> io::Result<()> {
+        unsafe {
+            let playback_started_event = Kevent {
+                ident: AUDIO_QUEUE_PLAYBACK_STARTED,
+                filter: kq::EVFILT_USER,
+                flags: 0,
+                fflags: kq::NOTE_TRIGGER,
+                data: 0,
+                udata: 0,
+            };
+
+            let changelist = [playback_started_event];
+
+            let result = kevent(
+                self.queue,
+                changelist.as_ptr(),
+                changelist.len() as i32,
+                ptr::null_mut(),
+                0,
+                ptr::null(),
+            );
+
+            if result < 0 {
+                return Err(io::Error::last_os_error());
+            }
+            Ok(())
+        }
+    }
+
     pub fn trigger_playback_finished_event(&mut self) -> io::Result<()> {
         //TODO: Extract function for writing to kqueue
         unsafe {
@@ -202,6 +235,15 @@ pub fn build_event_queue() -> io::Result<EventQueue> {
         // TODO: Maybe using a unique ident per file along with a EV_ONESHOT would be
         // easier? i.e using udata to signal the audio queue thats stopped
 
+        let playback_started_event = Kevent {
+            ident: AUDIO_QUEUE_PLAYBACK_STARTED,
+            filter: kq::EVFILT_USER,
+            flags: kq::EV_ADD | kq::EV_CLEAR,
+            fflags: 0,
+            data: 0,
+            udata: 0,
+        };
+
         // End of audio queue playback
         let playback_finished_event = Kevent {
             ident: AUDIO_QUEUE_PLAYBACK_FINISHED,
@@ -223,7 +265,12 @@ pub fn build_event_queue() -> io::Result<EventQueue> {
         };
 
         // Register interest in all events
-        let changelist = [stdin_event, terminal_resized_event, playback_finished_event];
+        let changelist = [
+            stdin_event,
+            terminal_resized_event,
+            playback_started_event,
+            playback_finished_event,
+        ];
 
         let result = kevent(
             kqueue,

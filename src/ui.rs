@@ -116,6 +116,12 @@ impl<'a> TerminalUI<'a> {
         Ok(())
     }
 
+    pub fn display_playback_progress(&mut self, time: f64) -> io::Result<()> {
+        write!(self.handle, "{ESCAPE}{};3{MOVE_CURSOR}", self.status_row)?;
+        write!(self.handle, "{time}")?;
+        Ok(())
+    }
+
     pub fn display_volume(&mut self, volume: f32) -> io::Result<()> {
         write!(self.handle, "{ESCAPE}{};1{MOVE_CURSOR}", self.volume_row)?;
         let vol_percent = volume * 100.0;

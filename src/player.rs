@@ -10,8 +10,9 @@ use std::ptr;
 //TODO: Check for lots of inner loop allocs (i.e Vec::new or vec!)
 
 use crate::ffi::audio_toolbox::{
-    self, AudioFileID, AudioQueueBufferRef, AudioQueueLevelMeterState, AudioQueuePropertyID,
-    AudioQueueRef, AudioStreamBasicDescription,
+    self, audio_queue_get_current_time, AudioFileID, AudioQueueBufferRef,
+    AudioQueueLevelMeterState, AudioQueuePropertyID, AudioQueueRef, AudioStreamBasicDescription,
+    AudioTimeStamp,
 };
 
 use crate::events::CallbackNotifier;
@@ -313,7 +314,12 @@ impl AudioCallbackHandler {
                     .trigger_playback_finished_event()
                     .expect("failed to trigger playback event");
             }
-            Ok(_) => {} // Ignore the queue starting
+            Ok(_) => {
+                // Any other value is the queue starting
+                self.notifier
+                    .trigger_playback_started_event()
+                    .expect("failed to trigger playback event");
+            }
             //TODO: Feed back error to controller?
             Err(error) => print!("booooo!: {error}\r\n"),
         }
@@ -366,6 +372,12 @@ impl<'a> AudioFilePlayer<'a> {
     pub fn get_meter_level(&self, state: &mut MeterState) -> PlaybackResult<()> {
         state.update(self.output_queue)
     }
+
+    pub fn get_playback_time(&mut self) -> PlaybackResult<Option<f64>> {
+        //TODO: Use sample rate to translate into playback progress
+        let time = audio_queue_read_current_sample_time(self.output_queue)?;
+        Ok(time)
+    }
 }
 
 impl<'a> Drop for AudioFilePlayer<'a> {
@@ -397,6 +409,8 @@ impl PlaybackVolume {
     }
 }
 
+//TODO: If we made meter state always return two channels (ie. duplicated for
+// mono), then would we need to hold it externally to player on the stack?
 pub struct MeterState(Box<[AudioQueueLevelMeterState]>);
 
 impl MeterState {
@@ -910,6 +924,24 @@ fn audio_queue_read_meter_level(
         assert!(data_size == expected_size);
         Ok(())
     }
+}
+
+fn audio_queue_read_current_sample_time(queue: AudioQueueRef) -> SystemResult<Option<f64>> {
+    //TODO: Check this isnt problematically large to repetedly zero
+    let mut timestamp = AudioTimeStamp::default();
+    unsafe {
+        let status =
+            audio_queue_get_current_time(queue, ptr::null(), &mut timestamp, ptr::null_mut());
+
+        // If the queue isn't running, it has no playback time
+        if status == audio_toolbox::AUDIO_QUEUE_ERROR_INVALID_RUN_STATE {
+            return Ok(None);
+        }
+        if status != 0 {
+            return Err(SystemErrorCode(status));
+        }
+    }
+    Ok(Some(timestamp.sample_time))
 }
 
 unsafe fn cfstring_to_string(cfstring: core_foundation::CFStringRef) -> String {

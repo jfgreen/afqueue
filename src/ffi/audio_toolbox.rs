@@ -129,6 +129,10 @@ pub const AUDIO_QUEUE_PARAMETER_VOLUME: AudioQueueParameterID = 1;
 /// stopping, or being disposed.
 pub const AUDIO_QUEUE_ERROR_ENQUEUE_DURING_RESET: OSStatus = -66632;
 
+/// Error returned when a function failes because it requires the audio queue to
+/// be in a specific state, e.g running.
+pub const AUDIO_QUEUE_ERROR_INVALID_RUN_STATE: OSStatus = -66678;
+
 /// A reference to an opaque type representing an audio queue object.
 ///
 /// An audio queue enables recording and playback of audio in macOS.
@@ -286,6 +290,7 @@ pub type SMPTETimeFlags = u32;
 
 /// A structure representing a SMPTE time.
 #[repr(C)]
+#[derive(Default)]
 pub struct SMPTETime {
     /// Number of subframes in the full message.
     pub subframes: i16,
@@ -312,6 +317,7 @@ pub type AudioTimeStampFlags = u32;
 
 /// A structure holding different representations of a given point in time.
 #[repr(C)]
+#[derive(Default)]
 pub struct AudioTimeStamp {
     /// Absolute sample frame time.
     pub sample_time: f64,
