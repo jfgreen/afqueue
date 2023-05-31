@@ -9,6 +9,7 @@ use crate::player::{PlaybackContext, PlaybackVolume};
 use crate::ui::TerminalUI;
 
 const UI_TICK_DURATION_MICROSECONDS: i64 = 33333; // 30FPS
+const UPDATE_PROGRESS_TICK_FREQUENCY: usize = 30; // Every second
 
 //TODO: Figure out what error context is useful to add to the below
 
@@ -47,7 +48,10 @@ impl<'a> Boombox<'a> {
         let timer_set = true;
         let mut exit_requested = false;
         let mut paused = false;
+        let mut tick_count = 0;
 
+        //TODO: Duplicated below
+        //TODO: Would it be eaiser to enforce a stereo meter?
         self.ui.update_layout(meter_state.channel_count());
         self.ui.clear_screen()?;
         self.ui.display_filename(path)?;
@@ -129,11 +133,14 @@ impl<'a> Boombox<'a> {
                     player.get_meter_level(&mut meter_state)?;
                     self.ui.display_meter(meter_state.levels())?;
 
-                    //TODO: We dont need to update this every time
-                    if let Some(progress) = player.get_playback_time()? {
-                        self.ui.display_playback_progress(progress)?;
+                    if tick_count % UPDATE_PROGRESS_TICK_FREQUENCY == 0 {
+                        //TODO: We dont need to update this every time
+                        if let Some(progress) = player.get_playback_time()? {
+                            self.ui.display_playback_progress(progress)?;
+                        }
                     }
                     self.ui.flush()?;
+                    tick_count += 1;
                 }
                 Event::TerminalResized => {
                     self.ui.update_size()?;
