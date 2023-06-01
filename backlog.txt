@@ -1,10 +1,10 @@
 Rename to something fun.
 Make VU meter an optional feature that can be toggled on and off.
-Display playback time.
 Show the queued up files.
 Add some cool little animation.
 Display keybindings when the user presses '?' or simmilar.
 Allow seeking within a song.
+Allow restarting a song, or going back to previous one.
 Rework input processing to allow arrow keys to be used.
 Rethink key mapping.
 Keep on top of tech debt / todos / rough edges.
