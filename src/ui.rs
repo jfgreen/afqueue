@@ -35,6 +35,7 @@ pub struct TerminalUI<'a> {
 impl<'a> TerminalUI<'a> {
     pub fn activate() -> io::Result<Self> {
         let stdout = io::stdout();
+        //TODO: Use new rust 1.7 feature to assert this is a tty
         let mut handle = stdout.lock();
         let stdout_fd = stdout.as_raw_fd();
 
@@ -116,9 +117,14 @@ impl<'a> TerminalUI<'a> {
         Ok(())
     }
 
-    pub fn display_playback_progress(&mut self, time: f64) -> io::Result<()> {
+    pub fn display_playback_progress(
+        &mut self,
+        playback_time: f64,
+        total_duration: f64,
+    ) -> io::Result<()> {
+        //TODO: Convert seconds to minutes i.e 00:00 (remember to test on hour or more)
         write!(self.handle, "{ESCAPE}{};3{MOVE_CURSOR}", self.status_row)?;
-        write!(self.handle, "{time}")?;
+        write!(self.handle, "{playback_time:.0} / {total_duration:.0}")?;
         Ok(())
     }
 

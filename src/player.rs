@@ -185,6 +185,10 @@ impl PlaybackContext {
         audio_file_read_metadata(self.playback_file).map_err(|e| e.into())
     }
 
+    pub fn estimated_duration(&self) -> PlaybackResult<f64> {
+        audio_file_read_estimated_duration(self.playback_file).map_err(|e| e.into())
+    }
+
     pub fn new_audio_callback_handler(&self, notifier: CallbackNotifier) -> AudioCallbackHandler {
         AudioCallbackHandler {
             playback_file: self.playback_file,
@@ -640,6 +644,10 @@ fn audio_file_read_packet_size_upper_bound(file: AudioFileID) -> SystemResult<u3
         file,
         audio_toolbox::AUDIO_FILE_PROPERTY_PACKET_SIZE_UPPER_BOUND,
     )
+}
+
+fn audio_file_read_estimated_duration(file: AudioFileID) -> SystemResult<f64> {
+    audio_file_get_property(file, audio_toolbox::AUDIO_FILE_PROPERTY_ESTIMATED_DURATION)
 }
 
 // This only works with sized types

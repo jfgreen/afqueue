@@ -82,6 +82,16 @@ pub const AUDIO_FILE_PROPERTY_MAGIC_COOKIE_DATA: AudioFilePropertyID = u4cc!(*b"
 /// The value of this property is represented as a u32.
 pub const AUDIO_FILE_PROPERTY_PACKET_SIZE_UPPER_BOUND: AudioFilePropertyID = u4cc!(*b"pkub");
 
+/// Constant used to read a files estimated duration
+///
+/// Using this constant with `audio_file_get_property` will return the estimated
+/// duration of the audio file in seconds. If possible, an accurate duration
+/// will be returned, e.g if all audio packets have already been read, or if the
+/// duration can be infered without having to scan the whole file.
+///
+/// The value of this property is represented by an f64.
+pub const AUDIO_FILE_PROPERTY_ESTIMATED_DURATION: AudioFilePropertyID = u4cc!(*b"edur");
+
 /// Error returned when trying to access an unsupported audio file property
 pub const AUDIO_FILE_ERROR_UNSUPPORTED_PROPERTY: OSStatus = i4cc!(*b"pty?");
 

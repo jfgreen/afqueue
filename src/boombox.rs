@@ -40,6 +40,7 @@ impl<'a> Boombox<'a> {
     fn play(&mut self, path: &str) -> Result<ControlFlow<()>, AfqueueError> {
         let context = PlaybackContext::new(path)?;
         let metadata = context.file_metadata()?;
+        let estimated_duration = context.estimated_duration()?;
         let mut meter_state = context.new_meter_state();
         let notifier = self.queue.create_callback_notifier();
         let mut handler = context.new_audio_callback_handler(notifier);
@@ -135,9 +136,9 @@ impl<'a> Boombox<'a> {
                     self.ui.display_meter(meter_state.levels())?;
 
                     if tick_count % UPDATE_PROGRESS_TICK_FREQUENCY == 0 {
-                        //TODO: We dont need to update this every time
                         if let Some(progress) = player.get_playback_time()? {
-                            self.ui.display_playback_progress(progress)?;
+                            self.ui
+                                .display_playback_progress(progress, estimated_duration)?;
                         }
                     }
                     self.ui.flush()?;
