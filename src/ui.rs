@@ -18,6 +18,12 @@ const MOVE_CURSOR: &str = "H";
 
 const NEW_LINE: &str = "\r\n";
 
+const FILENAME_ROW: usize = 1;
+const METER_ROW: usize = 3;
+const STATUS_ROW: usize = 7;
+const VOLUME_ROW: usize = 8;
+const METADATA_ROW: usize = 10;
+
 //TODO: Colourised meter?
 
 pub struct TerminalUI<'a> {
@@ -25,11 +31,6 @@ pub struct TerminalUI<'a> {
     handle: io::StdoutLock<'a>,
     original_termios: Termios,
     size: WinSize,
-    filename_row: usize,
-    meter_row: usize,
-    status_row: usize,
-    volume_row: usize,
-    metadata_row: usize,
 }
 
 impl<'a> TerminalUI<'a> {
@@ -55,11 +56,6 @@ impl<'a> TerminalUI<'a> {
             handle,
             original_termios,
             size,
-            filename_row: 0,
-            meter_row: 0,
-            status_row: 0,
-            volume_row: 0,
-            metadata_row: 0,
         })
     }
 
@@ -68,34 +64,22 @@ impl<'a> TerminalUI<'a> {
         Ok(())
     }
 
-    pub fn update_layout(&mut self, meter_rows: usize) {
-        let row_gap = 2;
-        self.filename_row = 1;
-        self.meter_row = self.filename_row + row_gap;
-        self.status_row = self.meter_row + meter_rows + row_gap;
-        self.volume_row = self.status_row + 1;
-        self.metadata_row = self.volume_row + row_gap;
-    }
-
     pub fn update_size(&mut self) -> io::Result<()> {
         self.size = read_term_size(self.stdout_fd)?;
         Ok(())
     }
 
     pub fn display_filename(&mut self, filename: &str) -> io::Result<()> {
-        write!(self.handle, "{ESCAPE}{};1{MOVE_CURSOR}", self.filename_row)?;
+        write!(self.handle, "{ESCAPE}{};1{MOVE_CURSOR}", FILENAME_ROW)?;
         write!(self.handle, "Playing: {}", filename)?;
         Ok(())
     }
 
-    pub fn display_meter(
-        &mut self,
-        meter_channels: impl IntoIterator<Item = f32>,
-    ) -> io::Result<()> {
-        write!(self.handle, "{ESCAPE}{};1{MOVE_CURSOR}", self.meter_row)?;
+    pub fn display_meter(&mut self, levels: &[f32; 2]) -> io::Result<()> {
+        write!(self.handle, "{ESCAPE}{};1{MOVE_CURSOR}", METER_ROW)?;
         let max_bar_length = self.size.ws_col as f32;
 
-        for channel_power in meter_channels {
+        for channel_power in levels {
             let bar_length = (max_bar_length * channel_power) as usize;
             write!(self.handle, "{NEW_LINE}")?;
             for _ in 0..bar_length {
@@ -108,7 +92,7 @@ impl<'a> TerminalUI<'a> {
     }
 
     pub fn display_playback_state(&mut self, paused: bool) -> io::Result<()> {
-        write!(self.handle, "{ESCAPE}{};1{MOVE_CURSOR}", self.status_row)?;
+        write!(self.handle, "{ESCAPE}{};1{MOVE_CURSOR}", STATUS_ROW)?;
         if paused {
             write!(self.handle, "⏸")?;
         } else {
@@ -122,21 +106,19 @@ impl<'a> TerminalUI<'a> {
         playback_time: f64,
         total_duration: f64,
     ) -> io::Result<()> {
-        //TODO: Convert seconds to minutes i.e 00:00 (remember to test on hour or more)
-
         let playback_secs = playback_time % 60.0;
         let playback_mins = (playback_time / 60.0).floor();
         let total_secs = total_duration % 60.0;
         let total_mins = (total_duration / 60.0).floor();
 
-        write!(self.handle, "{ESCAPE}{};3{MOVE_CURSOR}", self.status_row)?;
+        write!(self.handle, "{ESCAPE}{};3{MOVE_CURSOR}", STATUS_ROW)?;
         write!(self.handle, "{playback_mins:02.0}:{playback_secs:02.0}")?;
         write!(self.handle, " / {total_mins:02.0}:{total_secs:02.0}")?;
         Ok(())
     }
 
     pub fn display_volume(&mut self, volume: f32) -> io::Result<()> {
-        write!(self.handle, "{ESCAPE}{};1{MOVE_CURSOR}", self.volume_row)?;
+        write!(self.handle, "{ESCAPE}{};1{MOVE_CURSOR}", VOLUME_ROW)?;
         let vol_percent = volume * 100.0;
         write!(self.handle, "Volume: {vol_percent}%")?;
         write!(self.handle, "{ESCAPE}{CLEAR_LINE_REMAINDER}")?;
@@ -144,7 +126,7 @@ impl<'a> TerminalUI<'a> {
     }
 
     pub fn display_metadata(&mut self, metadata: &[(String, String)]) -> io::Result<()> {
-        write!(self.handle, "{ESCAPE}{};1{MOVE_CURSOR}", self.metadata_row)?;
+        write!(self.handle, "{ESCAPE}{};1{MOVE_CURSOR}", METADATA_ROW)?;
         write!(self.handle, "Properties:")?;
         write!(self.handle, "{NEW_LINE}")?;
         for (k, v) in metadata {

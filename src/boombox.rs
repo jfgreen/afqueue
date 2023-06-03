@@ -41,7 +41,7 @@ impl<'a> Boombox<'a> {
         let context = PlaybackContext::new(path)?;
         let metadata = context.file_metadata()?;
         let estimated_duration = context.estimated_duration()?;
-        let mut meter_state = context.new_meter_state();
+        let mut meter_state = [0f32, 0f32];
         let notifier = self.queue.create_callback_notifier();
         let mut handler = context.new_audio_callback_handler(notifier);
         let mut player = context.new_audio_player(&mut handler)?;
@@ -52,11 +52,10 @@ impl<'a> Boombox<'a> {
         let mut tick_count = 0;
 
         //TODO: Duplicated below
-        //TODO: Would it be eaiser to enforce a stereo meter?
-        self.ui.update_layout(meter_state.channel_count());
+
         self.ui.clear_screen()?;
         self.ui.display_filename(path)?;
-        self.ui.display_meter(meter_state.levels())?;
+        self.ui.display_meter(&meter_state)?;
         self.ui.display_playback_state(paused)?;
         self.ui.display_volume(self.volume.gain())?;
         self.ui.display_metadata(&metadata)?;
@@ -132,8 +131,8 @@ impl<'a> Boombox<'a> {
                     // Therefore the only sensible thing to do is to ask for forgiveness instead of
                     // permission! So get_playback_time might not return a value.
 
-                    player.get_meter_level(&mut meter_state)?;
-                    self.ui.display_meter(meter_state.levels())?;
+                    meter_state = player.get_meter_level()?;
+                    self.ui.display_meter(&meter_state)?;
 
                     if tick_count % UPDATE_PROGRESS_TICK_FREQUENCY == 0 {
                         if let Some(progress) = player.get_playback_time()? {
@@ -148,7 +147,7 @@ impl<'a> Boombox<'a> {
                     self.ui.update_size()?;
                     self.ui.clear_screen()?;
                     self.ui.display_filename(path)?;
-                    self.ui.display_meter(meter_state.levels())?;
+                    self.ui.display_meter(&meter_state)?;
                     self.ui.display_playback_state(paused)?;
                     self.ui.display_volume(self.volume.gain())?;
                     self.ui.display_metadata(&metadata)?;

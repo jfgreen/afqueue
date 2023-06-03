@@ -231,18 +231,16 @@ impl PlaybackContext {
             handle_buffer(handler_ptr, output_queue, buffer_ref);
         }
 
+        let default_meter = AudioQueueLevelMeterState::default();
+        let meter_count = self.format.channels_per_frame as usize;
+        let meters = vec![default_meter; meter_count];
+
         Ok(AudioFilePlayer {
             output_queue,
             handler: PhantomData,
             sample_rate: self.format.sample_rate,
+            meter_state: meters.into_boxed_slice(),
         })
-    }
-
-    pub fn new_meter_state(&self) -> MeterState {
-        let default_meter = AudioQueueLevelMeterState::default();
-        let meter_count = self.format.channels_per_frame as usize;
-        let init_levels = vec![default_meter; meter_count];
-        MeterState(init_levels.into_boxed_slice())
     }
 }
 
@@ -342,6 +340,8 @@ pub struct AudioFilePlayer<'a> {
     output_queue: AudioQueueRef,
     handler: PhantomData<&'a mut AudioCallbackHandler>,
     sample_rate: f64,
+    //TODO: Assert somehow that this is at least > 1
+    meter_state: Box<[AudioQueueLevelMeterState]>,
 }
 
 impl<'a> AudioFilePlayer<'a> {
@@ -375,8 +375,16 @@ impl<'a> AudioFilePlayer<'a> {
         Ok(())
     }
 
-    pub fn get_meter_level(&self, state: &mut MeterState) -> PlaybackResult<()> {
-        state.update(self.output_queue)
+    pub fn get_meter_level(&mut self) -> PlaybackResult<[f32; 2]> {
+        audio_queue_read_meter_level(self.output_queue, &mut self.meter_state)?;
+
+        // TODO: Panic (or maybe err?) if meter_state.len() is 0
+        let mut levels = self.meter_state.iter().map(|chan| chan.average_power);
+        Ok(match (levels.next(), levels.next()) {
+            (Some(chan_1), None) => [chan_1, chan_1],
+            (Some(chan_1), Some(chan_2)) => [chan_1, chan_2],
+            _ => [0.0, 0.0], // This shouldn't happen
+        })
     }
 
     pub fn get_playback_time(&mut self) -> PlaybackResult<Option<f64>> {
@@ -412,25 +420,6 @@ impl PlaybackVolume {
 
     pub fn gain(&self) -> f32 {
         self.volume as f32 / MAX_VOLUME as f32
-    }
-}
-
-//TODO: If we made meter state always return two channels (ie. duplicated for
-// mono), then would we need to hold it externally to player on the stack?
-pub struct MeterState(Box<[AudioQueueLevelMeterState]>);
-
-impl MeterState {
-    pub fn levels(&self) -> impl IntoIterator<Item = f32> + '_ {
-        self.0.iter().map(|channel| channel.average_power)
-    }
-
-    pub fn channel_count(&self) -> usize {
-        self.0.len()
-    }
-
-    fn update(&mut self, output_queue: AudioQueueRef) -> PlaybackResult<()> {
-        audio_queue_read_meter_level(output_queue, &mut self.0)?;
-        Ok(())
     }
 }
 
