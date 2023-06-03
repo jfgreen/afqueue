@@ -277,7 +277,7 @@ impl AudioCallbackHandler {
             //TODO: Report error properly
             Ok(packets_read) => packets_read,
             Err(error) => {
-                print!("oh no: {error}\r\n");
+                //TODO: Report error properly
                 self.finished = true;
                 return;
             }
@@ -303,8 +303,7 @@ impl AudioCallbackHandler {
             }
             // Anything else is probably a legitimate error condition
             Err(SystemErrorCode(code)) => {
-                //TODO: Report error properly
-                print!("oh no: {code}\r\n");
+                //TODO: Report error
                 self.finished = true;
             }
         }
@@ -324,7 +323,7 @@ impl AudioCallbackHandler {
                     .expect("failed to trigger playback event");
             }
             //TODO: Feed back error to controller?
-            Err(error) => print!("booooo!: {error}\r\n"),
+            Err(error) => panic!("booooo!: {error}\r\n"),
         }
     }
 }

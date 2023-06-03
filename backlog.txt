@@ -19,4 +19,3 @@ Add a debug mode / toggle showing things like the audio stream basic description
 Fix freeze when external drive is removed
 Explore what meaningful tests looks like
 Figure out UI layout
-Remove print statements that are locking UI?
