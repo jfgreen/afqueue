@@ -16,13 +16,18 @@ const CLEAR_SCREEN: &str = "2J";
 const CLEAR_LINE_REMAINDER: &str = "K";
 const MOVE_CURSOR: &str = "H";
 
+const COLOUR_RED: &str = "0;31m";
+const COLOUR_GREEN: &str = "0;32m";
+const COLOUR_YELLOW: &str = "0;33m";
+const COLOUR_RESET: &str = "0m";
+
 const NEW_LINE: &str = "\r\n";
 
 const FILENAME_ROW: usize = 1;
-const METER_ROW: usize = 3;
-const STATUS_ROW: usize = 7;
-const VOLUME_ROW: usize = 8;
-const METADATA_ROW: usize = 10;
+const METER_ROW: usize = 2;
+const STATUS_ROW: usize = 6;
+const VOLUME_ROW: usize = 7;
+const METADATA_ROW: usize = 9;
 
 //TODO: Colourised meter?
 
@@ -77,16 +82,30 @@ impl<'a> TerminalUI<'a> {
 
     pub fn display_meter(&mut self, levels: &[f32; 2]) -> io::Result<()> {
         write!(self.handle, "{ESCAPE}{};1{MOVE_CURSOR}", METER_ROW)?;
+
+        //TODO: pull into fields
         let max_bar_length = self.size.ws_col as f32;
+        let total_cols = self.size.ws_col as usize;
+        let green_cols = (total_cols * 70) / 100;
+        let amber_cols = (total_cols * 15) / 100;
 
         for channel_power in levels {
-            let bar_length = (max_bar_length * channel_power) as usize;
+            let bar_length = (max_bar_length * channel_power).round() as usize;
             write!(self.handle, "{NEW_LINE}")?;
-            for _ in 0..bar_length {
+            write!(self.handle, "{ESCAPE}{COLOUR_GREEN}")?;
+            //TODO: Is there a nicer less branchy way to do this... with maths?
+            for n in 0..bar_length {
+                if n == green_cols + 1 {
+                    write!(self.handle, "{ESCAPE}{COLOUR_YELLOW}")?;
+                }
+                if n == green_cols + amber_cols + 1 {
+                    write!(self.handle, "{ESCAPE}{COLOUR_RED}")?;
+                }
                 write!(self.handle, "█")?;
             }
             write!(self.handle, "{ESCAPE}{CLEAR_LINE_REMAINDER}")?;
         }
+        write!(self.handle, "{ESCAPE}{COLOUR_RESET}")?;
 
         Ok(())
     }
