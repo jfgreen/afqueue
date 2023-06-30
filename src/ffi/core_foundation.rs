@@ -51,20 +51,24 @@ pub struct CFRange {
     pub length: CFIndex,
 }
 
+/// Opaque data type for Core Foundation URL, provides functionality to
+/// manipulate URL strings.
+pub enum CFURL {}
+
+/// Opaque data type for Core Foundation Dictionary, holds data in key value
+/// pairs.
+pub enum CFDictionary {}
+
+/// Opaque data type for Core Foundation String, exposes various string
+/// manipulation features.
+pub enum CFString {}
+
+/// Opaque data type for Core Foundation run loop, dispatches control in
+/// response to inputs.
+pub enum CFRunLoop {}
+
 #[link(name = "CoreFoundation", kind = "framework")]
 extern "C" {
-
-    /// Core Foundation URL, provides functionality to manipulate URL strings.
-    pub type CFURL;
-
-    /// Core Foundation Dictionary, holds data in key value pairs.
-    pub type CFDictionary;
-
-    /// Core Foundation String, exposes various string manipulation features.
-    pub type CFString;
-
-    /// Core Foundation run loop, dispatches control in response to inputs.
-    pub type CFRunLoop;
 
     /// Get the number of key value pairs stored in a `CFDictionary`.
     ///

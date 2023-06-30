@@ -2,8 +2,6 @@
 //!
 //! Built on top of the macOS AudioToolbox framework.
 
-#![feature(extern_types)]
-
 mod ffi {
     pub mod audio_toolbox;
     pub mod core_foundation;

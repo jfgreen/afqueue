@@ -381,17 +381,17 @@ pub type AudioQueuePropertyListenerProc = unsafe extern "C" fn(
 /// device state.
 pub type AudioQueueTimelineRef = *const OpaqueAudioQueueTimeline;
 
+/// An opaque data type that represents an audio file.
+pub enum OpaqueAudioFileID {}
+
+/// An opaque data type that represents an audio queue.
+pub enum OpaqueAudioQueue {}
+
+/// An opaque data type that represents an audio queue timeline.
+pub enum OpaqueAudioQueueTimeline {}
+
 #[link(name = "AudioToolbox", kind = "framework")]
 extern "C" {
-
-    /// An opaque data type that represents an audio file.
-    pub type OpaqueAudioFileID;
-
-    /// An opaque data type that represents an audio queue.
-    pub type OpaqueAudioQueue;
-
-    /// An opaque data type that represents an audio queue timeline.
-    pub type OpaqueAudioQueueTimeline;
 
     /// Open an audio file with the AudioToolbox framework.
     ///
